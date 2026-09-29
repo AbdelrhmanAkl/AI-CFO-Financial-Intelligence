@@ -4,7 +4,6 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from typing_extensions import TypedDict
 
-from agents.local_llm import llm
 from agents.sql_agent import run_sql_agent
 from agents.risk_agent import run_risk_agent
 from agents.forecast_agent import run_forecast_agent
@@ -13,10 +12,15 @@ from agents.report_agent import run_report_agent
 from agents.report_validator import validate_report
 
 
+# ============================================================
+# STATE
+# ============================================================
+
 class CFOState(TypedDict, total=False):
     question: str
 
     selected_agents: list[str]
+    executed_agents: list[str]
 
     sql_result: dict
     risk_result: dict
@@ -29,78 +33,85 @@ class CFOState(TypedDict, total=False):
     final_report: str
 
 
+# ============================================================
+# AGENT ORDER
+# ============================================================
+
+AGENT_ORDER = [
+    "SQL",
+    "RISK",
+    "FORECAST",
+    "INSIGHT",
+    "REPORT",
+    "VALIDATOR",
+]
+
+
+NODE_MAPPING = {
+    "SQL": "sql_agent",
+    "RISK": "risk_agent",
+    "FORECAST": "forecast_agent",
+    "INSIGHT": "insight_agent",
+    "REPORT": "report_agent",
+    "VALIDATOR": "validator",
+}
+
+
+# ============================================================
+# QUESTION CLASSIFICATION
+# ============================================================
+
 def classify_question(question: str) -> list[str]:
     """
-    Determine which analytical agents are relevant
-    to the user's question.
+    Determine which agents are required for the user's request.
+
+    The supervisor is deterministic:
+    - no LLM-based routing
+    - predictable execution
+    - UI reflects the actual workflow
+    - unrelated agents are not executed
+
+    Complete financial analysis:
+        SQL
+        RISK
+        FORECAST
+        INSIGHT
+        REPORT
+        VALIDATOR
     """
 
-    prompt = f"""
-You are the supervisor of a financial intelligence multi-agent system.
+    question_lower = question.lower().strip()
 
-Available agents:
-
-SQL:
-- database queries
-- financial performance statistics
-- totals
-- counts
-- transaction analysis
-
-RISK:
-- anomaly detection
-- suspicious transactions
-- risk analysis
-- laundering analysis
-
-FORECAST:
-- forecasting
-- prediction
-- future transaction volume
-- trend prediction
-
-Return ONLY a comma-separated list containing zero or more of:
-
-SQL
-RISK
-FORECAST
-
-Do not return explanations.
-
-User question:
-{question}
-"""
-
-    response = llm.invoke(prompt)
-
-    agents = {
-        agent.strip().upper()
-        for agent in response.content.split(",")
-    }
-
-    valid_agents = {
-        "SQL",
-        "RISK",
-        "FORECAST",
-    }
-
-    agents = agents.intersection(valid_agents)
-
-    question_lower = question.lower()
+    # --------------------------------------------------------
+    # PERFORMANCE / SQL
+    # --------------------------------------------------------
 
     sql_keywords = [
         "analyze",
         "analysis",
+        "financial analysis",
         "financial performance",
         "performance",
-        "transactions",
+        "financial activity",
+        "financial overview",
         "revenue",
         "expenses",
         "amount",
         "total",
         "count",
         "database",
+        "sql",
+        "metrics",
+        "metric",
+        "key financial metrics",
+        "transactions",
+        "transaction volume",
+        "transaction activity",
     ]
+
+    # --------------------------------------------------------
+    # RISK
+    # --------------------------------------------------------
 
     risk_keywords = [
         "risk",
@@ -110,64 +121,280 @@ User question:
         "anomaly",
         "anomalies",
         "laundering",
+        "money laundering",
         "fraud",
+        "financial crime",
     ]
+
+    # --------------------------------------------------------
+    # FORECAST
+    # --------------------------------------------------------
 
     forecast_keywords = [
         "forecast",
+        "forecasting",
         "predict",
         "prediction",
         "future",
         "next day",
         "next month",
+        "next week",
         "expected",
+        "trend prediction",
+        "trend forecast",
     ]
 
-    if any(
+    # --------------------------------------------------------
+    # INSIGHT
+    # --------------------------------------------------------
+
+    insight_keywords = [
+        "insight",
+        "insights",
+        "interpret",
+        "interpretation",
+        "key insight",
+        "key insights",
+        "business insight",
+        "business insights",
+        "recommendation",
+        "recommendations",
+        "management recommendation",
+        "management recommendations",
+        "action",
+        "actions",
+        "what should management do",
+        "what should we do",
+        "decision",
+        "decisions",
+    ]
+
+    # --------------------------------------------------------
+    # REPORT
+    # --------------------------------------------------------
+
+    report_keywords = [
+        "report",
+        "management report",
+        "executive report",
+        "financial report",
+        "executive summary",
+        "management summary",
+        "generate a report",
+        "generate report",
+        "create a report",
+        "create report",
+        "management report",
+    ]
+
+    # --------------------------------------------------------
+    # COMPLETE / EXECUTIVE ANALYSIS
+    # --------------------------------------------------------
+
+    comprehensive_keywords = [
+        "complete analysis",
+        "complete financial analysis",
+        "comprehensive analysis",
+        "comprehensive financial analysis",
+        "full analysis",
+        "full financial analysis",
+        "complete financial review",
+        "comprehensive financial review",
+        "overall analysis",
+        "overall financial analysis",
+        "end-to-end analysis",
+        "end to end analysis",
+        "complete review",
+        "full review",
+        "management analysis",
+        "executive analysis",
+        "financial decision analysis",
+    ]
+
+    # --------------------------------------------------------
+    # INTENT DETECTION
+    # --------------------------------------------------------
+
+    sql_requested = any(
         keyword in question_lower
         for keyword in sql_keywords
-    ):
-        agents.add("SQL")
+    )
 
-    if any(
+    risk_requested = any(
         keyword in question_lower
         for keyword in risk_keywords
-    ):
-        agents.add("RISK")
+    )
 
-    if any(
+    forecast_requested = any(
         keyword in question_lower
         for keyword in forecast_keywords
+    )
+
+    insight_requested = any(
+        keyword in question_lower
+        for keyword in insight_keywords
+    )
+
+    report_requested = any(
+        keyword in question_lower
+        for keyword in report_keywords
+    )
+
+    comprehensive_requested = any(
+        keyword in question_lower
+        for keyword in comprehensive_keywords
+    )
+
+    # --------------------------------------------------------
+    # SPECIAL CASE:
+    # COMPLETE FINANCIAL ANALYSIS
+    #
+    # This is the main executive workflow.
+    # --------------------------------------------------------
+
+    if comprehensive_requested:
+
+        return AGENT_ORDER.copy()
+
+    # --------------------------------------------------------
+    # MANAGEMENT RECOMMENDATIONS
+    #
+    # Recommendations require data + insights.
+    # --------------------------------------------------------
+
+    if insight_requested and not (
+        sql_requested
+        or risk_requested
+        or forecast_requested
     ):
-        agents.add("FORECAST")
+        sql_requested = True
+
+    # --------------------------------------------------------
+    # BUILD SELECTED AGENTS
+    # --------------------------------------------------------
+
+    agents = set()
+
+    # --------------------------------------------------------
+    # REPORT REQUEST
+    #
+    # A management report requires the full intelligence
+    # pipeline.
+    # --------------------------------------------------------
+
+    if report_requested:
+
+        agents.update(
+            {
+                "SQL",
+                "RISK",
+                "FORECAST",
+                "INSIGHT",
+                "REPORT",
+                "VALIDATOR",
+            }
+        )
+
+    else:
+
+        # ----------------------------------------------------
+        # PERFORMANCE
+        # ----------------------------------------------------
+
+        if sql_requested:
+            agents.add("SQL")
+
+        # ----------------------------------------------------
+        # RISK
+        #
+        # Risk depends on SQL/database information.
+        # ----------------------------------------------------
+
+        if risk_requested:
+
+            agents.add("SQL")
+            agents.add("RISK")
+
+        # ----------------------------------------------------
+        # FORECAST
+        #
+        # Forecast depends on historical transaction data.
+        # ----------------------------------------------------
+
+        if forecast_requested:
+
+            agents.add("SQL")
+            agents.add("FORECAST")
+
+        # ----------------------------------------------------
+        # INSIGHT
+        # ----------------------------------------------------
+
+        if insight_requested:
+
+            agents.add("SQL")
+            agents.add("INSIGHT")
+
+    # --------------------------------------------------------
+    # DEFAULT
+    # --------------------------------------------------------
 
     if not agents:
         agents.add("SQL")
 
+    # --------------------------------------------------------
+    # DETERMINISTIC ORDER
+    # --------------------------------------------------------
+
     return [
         agent
-        for agent in [
-            "SQL",
-            "RISK",
-            "FORECAST",
-        ]
+        for agent in AGENT_ORDER
         if agent in agents
     ]
 
 
+# ============================================================
+# NEXT NODE
+# ============================================================
+
+def get_next_node(
+    selected_agents: list[str],
+    current_agent: str,
+) -> str:
+
+    try:
+        current_index = AGENT_ORDER.index(
+            current_agent
+        )
+
+    except ValueError:
+        return "final"
+
+    for agent in AGENT_ORDER[current_index + 1:]:
+
+        if agent in selected_agents:
+            return NODE_MAPPING[agent]
+
+    return "final"
+
+
+# ============================================================
+# SUPERVISOR NODE
+# ============================================================
+
 def supervisor_node(
     state: CFOState,
 ) -> Command[
-    Literal["sql_agent"]
+    Literal[
+        "sql_agent",
+        "risk_agent",
+        "forecast_agent",
+        "insight_agent",
+        "report_agent",
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Determine the user's analytical intent and
-    start the complete financial intelligence pipeline.
-
-    The selected agents are stored as metadata.
-    The full analytical pipeline is still executed because
-    Insight, Report, and Validator require all upstream results.
-    """
 
     selected_agents = classify_question(
         state["question"]
@@ -176,85 +403,148 @@ def supervisor_node(
     if not selected_agents:
         selected_agents = ["SQL"]
 
+    first_agent = selected_agents[0]
+
+    next_node = NODE_MAPPING.get(
+        first_agent,
+        "final",
+    )
+
     return Command(
         update={
             "selected_agents": selected_agents,
+            "executed_agents": [],
         },
-        goto="sql_agent",
+        goto=next_node,
     )
 
+
+# ============================================================
+# SQL AGENT NODE
+# ============================================================
 
 def sql_agent_node(
     state: CFOState,
 ) -> Command[
-    Literal["risk_agent"]
+    Literal[
+        "risk_agent",
+        "forecast_agent",
+        "insight_agent",
+        "report_agent",
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Execute the SQL Agent.
-
-    SQL is always the first analytical stage because
-    the financial report requires verified database results.
-    """
 
     result = run_sql_agent(
         state["question"]
     )
 
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "SQL",
+    ]
+
+    next_node = get_next_node(
+        selected_agents=state["selected_agents"],
+        current_agent="SQL",
+    )
+
     return Command(
         update={
             "sql_result": result,
+            "executed_agents": executed_agents,
         },
-        goto="risk_agent",
+        goto=next_node,
     )
 
+
+# ============================================================
+# RISK AGENT NODE
+# ============================================================
 
 def risk_agent_node(
     state: CFOState,
 ) -> Command[
-    Literal["forecast_agent"]
+    Literal[
+        "forecast_agent",
+        "insight_agent",
+        "report_agent",
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Execute the Risk Agent.
-    """
 
     result = run_risk_agent()
+
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "RISK",
+    ]
+
+    next_node = get_next_node(
+        selected_agents=state["selected_agents"],
+        current_agent="RISK",
+    )
 
     return Command(
         update={
             "risk_result": result,
+            "executed_agents": executed_agents,
         },
-        goto="forecast_agent",
+        goto=next_node,
     )
 
+
+# ============================================================
+# FORECAST AGENT NODE
+# ============================================================
 
 def forecast_agent_node(
     state: CFOState,
 ) -> Command[
-    Literal["insight_agent"]
+    Literal[
+        "insight_agent",
+        "report_agent",
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Execute the Forecast Agent.
-    """
 
     result = run_forecast_agent()
+
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "FORECAST",
+    ]
+
+    next_node = get_next_node(
+        selected_agents=state["selected_agents"],
+        current_agent="FORECAST",
+    )
 
     return Command(
         update={
             "forecast_result": result,
+            "executed_agents": executed_agents,
         },
-        goto="insight_agent",
+        goto=next_node,
     )
 
+
+# ============================================================
+# INSIGHT AGENT NODE
+# ============================================================
 
 def insight_agent_node(
     state: CFOState,
 ) -> Command[
-    Literal["report_agent"]
+    Literal[
+        "report_agent",
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Generate AI-assisted analytical insights
-    using verified outputs from SQL, Risk, and Forecast agents.
-    """
 
     sql_result = state.get(
         "sql_result",
@@ -277,22 +567,37 @@ def insight_agent_node(
         forecast_result,
     )
 
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "INSIGHT",
+    ]
+
+    next_node = get_next_node(
+        selected_agents=state["selected_agents"],
+        current_agent="INSIGHT",
+    )
+
     return Command(
         update={
             "insight_result": result,
+            "executed_agents": executed_agents,
         },
-        goto="report_agent",
+        goto=next_node,
     )
 
+
+# ============================================================
+# REPORT AGENT NODE
+# ============================================================
 
 def report_agent_node(
     state: CFOState,
 ) -> Command[
-    Literal["validator"]
+    Literal[
+        "validator",
+        "final",
+    ]
 ]:
-    """
-    Generate the deterministic financial intelligence report.
-    """
 
     report = run_report_agent(
         sql_result=state.get(
@@ -313,27 +618,47 @@ def report_agent_node(
         ),
     )
 
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "REPORT",
+    ]
+
+    next_node = get_next_node(
+        selected_agents=state["selected_agents"],
+        current_agent="REPORT",
+    )
+
     return Command(
         update={
             "report": report,
+            "executed_agents": executed_agents,
         },
-        goto="validator",
+        goto=next_node,
     )
 
+
+# ============================================================
+# VALIDATOR NODE
+# ============================================================
 
 def validator_node(
     state: CFOState,
 ) -> Command[
     Literal["final"]
 ]:
-    """
-    Validate the generated report before returning it.
 
-    The Validator is the final quality gate.
-    """
+    report = state.get(
+        "report",
+        "",
+    )
+
+    if not report:
+        raise ValueError(
+            "Validator received an empty report."
+        )
 
     validation_result = validate_report(
-        report=state["report"],
+        report=report,
         sql_result=state.get(
             "sql_result",
             {},
@@ -348,35 +673,51 @@ def validator_node(
         ),
     )
 
-    if not validation_result["valid"]:
+    if not validation_result.get(
+        "valid",
+        False,
+    ):
         raise ValueError(
             "Report validation failed: "
             f"{validation_result}"
         )
 
+    executed_agents = [
+        *state.get("executed_agents", []),
+        "VALIDATOR",
+    ]
+
     return Command(
         update={
             "validation_result": validation_result,
-            "final_report": state["report"],
+            "final_report": report,
+            "executed_agents": executed_agents,
         },
         goto="final",
     )
 
 
+# ============================================================
+# FINAL NODE
+# ============================================================
+
 def final_node(
     state: CFOState,
 ) -> CFOState:
-    """
-    Return the final validated state.
-    """
+
+    # For workflows that generate a final report,
+    # make sure final_report is available.
+    if state.get("report") and not state.get("final_report"):
+        state["final_report"] = state["report"]
 
     return state
 
 
+# ============================================================
+# GRAPH
+# ============================================================
+
 def build_cfo_graph():
-    """
-    Build and compile the complete AI CFO LangGraph.
-    """
 
     graph = StateGraph(CFOState)
 
@@ -433,19 +774,29 @@ def build_cfo_graph():
     return graph.compile()
 
 
+# ============================================================
+# COMPILED GRAPH
+# ============================================================
+
 cfo_graph = build_cfo_graph()
 
+
+# ============================================================
+# PUBLIC API
+# ============================================================
 
 def run_cfo(
     question: str,
 ) -> dict:
-    """
-    Run the complete AI CFO workflow.
-    """
+
+    if not question or not question.strip():
+        raise ValueError(
+            "Question cannot be empty."
+        )
 
     return cfo_graph.invoke(
         {
-            "question": question,
+            "question": question.strip(),
         }
     )
 
@@ -453,12 +804,6 @@ def run_cfo(
 def run_supervisor(
     question: str,
 ) -> str:
-    """
-    Backward-compatible supervisor interface.
-
-    Returns the agents selected by the Supervisor
-    without executing the complete CFO pipeline.
-    """
 
     selected_agents = classify_question(
         question

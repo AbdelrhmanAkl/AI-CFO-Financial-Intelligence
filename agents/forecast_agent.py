@@ -18,6 +18,10 @@ ALPHA_VALUES = [
 BASELINE_WINDOW = 7
 MIN_TRAIN_SIZE = BASELINE_WINDOW
 
+# Diagnostic settings
+RECENT_WINDOW = 3
+REGIME_CHANGE_THRESHOLD = 0.80
+
 
 def get_daily_transaction_counts():
     query = """
@@ -236,27 +240,185 @@ def calculate_improvement_percentage(
     )
 
 
+def calculate_recent_statistics(
+    values,
+):
+    if not values:
+        raise ValueError(
+            "No values available for recent statistics."
+        )
+
+    recent_3_days = values[
+        -RECENT_WINDOW:
+    ]
+
+    recent_7_days = values[
+        -BASELINE_WINDOW:
+    ]
+
+    recent_3_day_average = mean(
+        recent_3_days
+    )
+
+    recent_7_day_average = mean(
+        recent_7_days
+    )
+
+    last_day_value = float(
+        values[-1]
+    )
+
+    previous_day_value = (
+        float(values[-2])
+        if len(values) >= 2
+        else last_day_value
+    )
+
+    if previous_day_value != 0:
+        last_day_change_percentage = (
+            (
+                last_day_value
+                - previous_day_value
+            )
+            / previous_day_value
+            * 100
+        )
+    else:
+        last_day_change_percentage = 0.0
+
+    return {
+        "recent_3_day_average": round(
+            recent_3_day_average,
+            2,
+        ),
+        "recent_7_day_average": round(
+            recent_7_day_average,
+            2,
+        ),
+        "last_day_change_percentage": round(
+            last_day_change_percentage,
+            2,
+        ),
+    }
+
+
+def detect_data_quality_conditions(
+    values,
+):
+    conditions = []
+
+    total_days = len(values)
+
+    if total_days < 30:
+        conditions.append(
+            "Short historical series: fewer than 30 daily observations are available."
+        )
+
+    if len(values) >= 2:
+        previous_day = float(
+            values[-2]
+        )
+
+        last_day = float(
+            values[-1]
+        )
+
+        if previous_day > 0:
+            change_ratio = abs(
+                last_day - previous_day
+            ) / previous_day
+
+            if (
+                change_ratio
+                >= REGIME_CHANGE_THRESHOLD
+            ):
+                conditions.append(
+                    "Recent transaction volume changed sharply between the last two observations."
+                )
+
+    if len(values) >= BASELINE_WINDOW:
+        recent_average = mean(
+            values[-BASELINE_WINDOW:]
+        )
+
+        earlier_values = values[
+            :-BASELINE_WINDOW
+        ]
+
+        if earlier_values:
+            earlier_average = mean(
+                earlier_values
+            )
+
+            if earlier_average > 0:
+                regime_ratio = (
+                    recent_average
+                    / earlier_average
+                )
+
+                if regime_ratio < 0.20:
+                    conditions.append(
+                        "Recent transaction volume is substantially lower than the earlier historical period."
+                    )
+
+                elif regime_ratio > 5.0:
+                    conditions.append(
+                        "Recent transaction volume is substantially higher than the earlier historical period."
+                    )
+
+    if not conditions:
+        conditions.append(
+            "No major data-quality condition detected."
+        )
+
+    return conditions
+
+
 def run_forecast_agent():
 
     daily_data = get_daily_transaction_counts()
 
     rows = daily_data["rows"]
 
+    if len(rows) <= MIN_TRAIN_SIZE:
+        raise ValueError(
+            "Not enough historical observations for forecasting."
+        )
+
+    # ---------------------------------------------------------
+    # Prepare daily transaction series
+    # ---------------------------------------------------------
+
+    dates = [
+        str(row[0])
+        for row in rows
+    ]
+
     values = [
         float(row[1])
         for row in rows
     ]
 
-    if len(values) <= MIN_TRAIN_SIZE:
-        raise ValueError(
-            "Not enough historical observations for forecasting."
-        )
-
     test_start_index = BASELINE_WINDOW
 
     test_observations = (
-        len(values)
-        - test_start_index
+        len(values) - test_start_index
+    )
+
+    # ---------------------------------------------------------
+    # Historical data diagnostics
+    # ---------------------------------------------------------
+
+    recent_statistics = (
+        calculate_recent_statistics(
+            values
+        )
+    )
+
+    data_quality_conditions = (
+        detect_data_quality_conditions(
+            values
+        )
     )
 
     # ---------------------------------------------------------
@@ -270,9 +432,13 @@ def run_forecast_agent():
         )
     )
 
-    best_ses_alpha = best_ses_result["alpha"]
+    best_ses_alpha = (
+        best_ses_result["alpha"]
+    )
 
-    ses_mae = best_ses_result["mae"]
+    ses_mae = (
+        best_ses_result["mae"]
+    )
 
     # ---------------------------------------------------------
     # Candidate 2: 7-Day Moving Average
@@ -298,7 +464,7 @@ def run_forecast_agent():
     )
 
     # ---------------------------------------------------------
-    # Compare all candidate models
+    # Compare candidate models
     # ---------------------------------------------------------
 
     candidate_models = [
@@ -324,14 +490,20 @@ def run_forecast_agent():
         key=lambda item: item["mae"],
     )
 
-    selected_model_name = selected_model["model"]
+    selected_model_name = (
+        selected_model["model"]
+    )
 
-    selected_mae = selected_model["mae"]
+    selected_mae = (
+        selected_model["mae"]
+    )
 
-    selected_alpha = selected_model["alpha"]
+    selected_alpha = (
+        selected_model["alpha"]
+    )
 
     # ---------------------------------------------------------
-    # Generate next-day forecast using selected model
+    # Generate next-day transaction-count forecast
     # ---------------------------------------------------------
 
     if selected_model_name == (
@@ -379,6 +551,24 @@ def run_forecast_agent():
     )
 
     # ---------------------------------------------------------
+    # Forecast interpretation
+    # ---------------------------------------------------------
+
+    forecast_warning = (
+        "Forecast is based on a short historical series "
+        "and should be interpreted as a statistical "
+        "transaction-count estimate rather than a guaranteed value."
+    )
+
+    if len(values) < 30:
+        forecast_warning = (
+            "Forecast is based on only "
+            f"{len(values)} daily observations. "
+            "The limited history and recent change in transaction "
+            "volume may reduce forecast stability."
+        )
+
+    # ---------------------------------------------------------
     # Return verified forecasting results
     # ---------------------------------------------------------
 
@@ -389,9 +579,22 @@ def run_forecast_agent():
 
         "alpha": selected_alpha,
 
-        "total_days": len(rows),
+        "total_days": len(values),
+
+        "first_date": dates[0],
+
+        "last_date": dates[-1],
+
+        "last_day_transactions": round(
+            values[-1],
+            2,
+        ),
 
         "historical_days": rows,
+
+        # -----------------------------------------------------
+        # Backtesting
+        # -----------------------------------------------------
 
         "backtest_test_start_index": (
             test_start_index
@@ -405,6 +608,10 @@ def run_forecast_agent():
             selected_mae,
             2,
         ),
+
+        # -----------------------------------------------------
+        # Candidate models
+        # -----------------------------------------------------
 
         "candidate_models": [
             {
@@ -428,6 +635,10 @@ def run_forecast_agent():
             }
             for result in alpha_results
         ],
+
+        # -----------------------------------------------------
+        # Baselines
+        # -----------------------------------------------------
 
         "baseline_method": (
             "7-Day Moving Average"
@@ -457,8 +668,60 @@ def run_forecast_agent():
             2,
         ),
 
+        # -----------------------------------------------------
+        # Forecast
+        # -----------------------------------------------------
+
         "forecast_next_day_transactions": round(
             next_day_forecast,
             2,
+        ),
+
+        "forecast_target": (
+            "Next-Day Transaction Count"
+        ),
+
+        "forecast_warning": (
+            forecast_warning
+        ),
+
+        # -----------------------------------------------------
+        # Recent activity diagnostics
+        # -----------------------------------------------------
+
+        "recent_3_day_average": (
+            recent_statistics[
+                "recent_3_day_average"
+            ]
+        ),
+
+        "recent_7_day_average": (
+            recent_statistics[
+                "recent_7_day_average"
+            ]
+        ),
+
+        "last_day_change_percentage": (
+            recent_statistics[
+                "last_day_change_percentage"
+            ]
+        ),
+
+        # -----------------------------------------------------
+        # Data quality diagnostics
+        # -----------------------------------------------------
+
+        "data_quality_conditions": (
+            data_quality_conditions
+        ),
+
+        "data_quality_status": (
+            "WARNING"
+            if not (
+                len(data_quality_conditions) == 1
+                and data_quality_conditions[0]
+                == "No major data-quality condition detected."
+            )
+            else "OK"
         ),
     }

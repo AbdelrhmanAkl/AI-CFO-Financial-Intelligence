@@ -1,270 +1,501 @@
-from agents.local_llm import llm
+from typing import Any
+
+from .local_llm import llm
 
 
-def extract_sql_facts(sql_result: dict) -> dict:
-    columns = sql_result.get("columns", [])
+def extract_sql_facts(
+    sql_result: dict[str, Any]
+) -> dict[str, Any]:
+
     rows = sql_result.get("rows", [])
 
     if not rows:
-        raise ValueError("SQL Agent returned no rows.")
+        return {}
 
     row = rows[0]
 
-    facts = dict(zip(columns, row))
-
-    required_fields = [
-        "transaction_count",
-        "total_amount_received",
-        "total_amount_paid",
-        "average_transaction_amount",
-        "laundering_transaction_count",
-    ]
-
-    missing = [field for field in required_fields if field not in facts]
-
-    if missing:
-        raise ValueError(
-            f"SQL Agent result is missing required fields: {missing}"
-        )
-
-    return facts
-
-
-def extract_risk_facts(risk_result: dict) -> dict:
-    required_fields = [
-        "amount_threshold",
-        "frequency_threshold",
-        "high_value_transactions",
-        "high_value_laundering",
-        "high_value_laundering_rate",
-        "high_frequency_accounts",
-        "transactions_from_high_frequency_accounts",
-    ]
-
-    missing = [
-        field
-        for field in required_fields
-        if field not in risk_result
-    ]
-
-    if missing:
-        raise ValueError(
-            f"Risk Agent result is missing required fields: {missing}"
-        )
-
     return {
-        "amount_threshold": risk_result["amount_threshold"],
-        "frequency_threshold": risk_result["frequency_threshold"],
-        "high_value_transactions": risk_result["high_value_transactions"],
-        "high_value_laundering": risk_result["high_value_laundering"],
-        "high_value_laundering_rate": risk_result[
-            "high_value_laundering_rate"
-        ],
-        "high_frequency_accounts": risk_result[
-            "high_frequency_accounts"
-        ],
-        "transactions_from_high_frequency_accounts": risk_result[
-            "transactions_from_high_frequency_accounts"
-        ],
+        "transaction_count":
+            row[0] if len(row) > 0 else None,
+
+        "total_amount_received":
+            row[1] if len(row) > 1 else None,
+
+        "total_amount_paid":
+            row[2] if len(row) > 2 else None,
+
+        "average_transaction_amount":
+            row[3] if len(row) > 3 else None,
+
+        "laundering_transaction_count":
+            row[4] if len(row) > 4 else None,
     }
 
 
-def extract_forecast_facts(forecast_result: dict) -> dict:
-    required_fields = [
-        "selected_model",
-        "method",
-        "backtest_test_observations",
-        "forecast_next_day_transactions",
-        "backtest_mae",
-        "baseline_method",
-        "baseline_mae",
-        "improvement_vs_baseline",
-    ]
+def extract_risk_facts(
+    risk_result: dict[str, Any]
+) -> dict[str, Any]:
 
-    missing = [
-        field
-        for field in required_fields
-        if field not in forecast_result
-    ]
-
-    if missing:
-        raise ValueError(
-            f"Forecast Agent result is missing required fields: {missing}"
-        )
+    if not risk_result:
+        return {}
 
     return {
-        "selected_model": forecast_result["selected_model"],
-        "method": forecast_result["method"],
-        "alpha": forecast_result.get("alpha"),
-        "backtest_test_observations": forecast_result[
-            "backtest_test_observations"
-        ],
-        "forecast_next_day_transactions": forecast_result[
-            "forecast_next_day_transactions"
-        ],
-        "backtest_mae": forecast_result["backtest_mae"],
-        "baseline_method": forecast_result["baseline_method"],
-        "baseline_mae": forecast_result["baseline_mae"],
-        "naive_baseline_method": forecast_result.get(
-            "naive_baseline_method"
-        ),
-        "naive_baseline_mae": forecast_result.get(
-            "naive_baseline_mae"
-        ),
-        "improvement_vs_baseline": forecast_result[
-            "improvement_vs_baseline"
-        ],
-        "improvement_vs_naive": forecast_result.get(
-            "improvement_vs_naive"
-        ),
-        "historical_days": forecast_result.get("historical_days"),
+        "high_value_transactions":
+            risk_result.get(
+                "high_value_transactions"
+            ),
+
+        "high_value_laundering":
+            risk_result.get(
+                "high_value_laundering"
+            ),
+
+        "high_value_laundering_rate":
+            risk_result.get(
+                "high_value_laundering_rate"
+            ),
+
+        "high_frequency_accounts":
+            risk_result.get(
+                "high_frequency_accounts"
+            ),
+
+        "transactions_from_high_frequency_accounts":
+            risk_result.get(
+                "transactions_from_high_frequency_accounts"
+            ),
     }
 
 
-def format_number(value):
-    if value is None:
-        return "N/A"
+def extract_forecast_facts(
+    forecast_result: dict[str, Any]
+) -> dict[str, Any]:
 
-    if isinstance(value, int):
-        return f"{value:,}"
+    if not forecast_result:
+        return {}
 
-    if isinstance(value, float):
-        return f"{value:,.2f}"
+    return {
+        "selected_model":
+            forecast_result.get(
+                "selected_model"
+            ),
 
-    return str(value)
+        "forecast_next_day_transactions":
+            forecast_result.get(
+                "forecast_next_day_transactions"
+            ),
+
+        "backtest_mae":
+            forecast_result.get(
+                "backtest_mae"
+            ),
+
+        "improvement_vs_baseline":
+            forecast_result.get(
+                "improvement_vs_baseline"
+            ),
+
+        "baseline_method":
+            forecast_result.get(
+                "baseline_method"
+            ),
+
+        "historical_days":
+            forecast_result.get(
+                "historical_days",
+                [],
+            ),
+
+        "total_days":
+            forecast_result.get(
+                "total_days"
+            ),
+
+        "first_date":
+            forecast_result.get(
+                "first_date"
+            ),
+
+        "last_date":
+            forecast_result.get(
+                "last_date"
+            ),
+
+        "last_day_transactions":
+            forecast_result.get(
+                "last_day_transactions"
+            ),
+
+        "forecast_target":
+            forecast_result.get(
+                "forecast_target"
+            ),
+
+        "forecast_warning":
+            forecast_result.get(
+                "forecast_warning"
+            ),
+
+        "recent_3_day_average":
+            forecast_result.get(
+                "recent_3_day_average"
+            ),
+
+        "recent_7_day_average":
+            forecast_result.get(
+                "recent_7_day_average"
+            ),
+
+        "last_day_change_percentage":
+            forecast_result.get(
+                "last_day_change_percentage"
+            ),
+
+        "data_quality_conditions":
+            forecast_result.get(
+                "data_quality_conditions",
+                [],
+            ),
+
+        "data_quality_status":
+            forecast_result.get(
+                "data_quality_status"
+            ),
+    }
+
+
+def contains_numeric_content(
+    text: str
+) -> bool:
+
+    return any(
+        character.isdigit()
+        for character in text
+    )
 
 
 def generate_llm_insight(
-    sql_facts: dict,
-    risk_facts: dict,
-    forecast_facts: dict,
-) -> list[str]:
+    sql_facts: dict[str, Any],
+    risk_facts: dict[str, Any],
+    forecast_facts: dict[str, Any],
+) -> str:
 
-    prompt = """
-You are the Insight Agent inside an AI CFO financial intelligence system.
+    prompt = f"""
+You are an analytical assistant inside an AI CFO system.
 
-Generate exactly THREE short neutral observations.
+Generate ONE short business observation.
 
-The application already handles all numerical values.
+STRICT RULES:
 
-Therefore:
-
-- Do NOT write any numbers.
-- Do NOT write percentages.
-- Do NOT calculate metrics.
-- Do NOT compare numerical values.
-- Do NOT create recommendations.
-- Do NOT claim fraud or financial crime.
-- Do NOT infer causation.
-- Do NOT use evaluative language.
-- Do NOT use words such as significant, major, substantial,
-  large, small, strong, weak, concerning, alarming, unusual,
-  abnormal, excellent, poor, reliable, accurate, or meaningful.
+- Do not output ANY digits.
+- Do not output ANY numbers.
+- Do not output percentages.
+- Do not output dates.
+- Do not output account IDs.
+- Do not calculate metrics.
+- Do not make recommendations.
+- Do not claim fraud occurred.
+- Do not claim money laundering occurred.
 - Risk indicators are analytical signals only.
-- The forecasting model is a statistical model and not a guaranteed outcome.
+- Do not claim a forecast model is highly reliable.
+- Do not use words such as "significantly improved accuracy".
+- Do not invent causal explanations.
+- Describe only patterns directly supported by the supplied facts.
+- If the forecast history is limited, mention that the forecast has limited historical support.
+- If recent transaction volume is lower than the preceding observations, this may be described as a recent decline in activity.
+- Do not treat a forecast warning as proof of a future outcome.
+- Maximum two sentences.
 
-Observation 1:
-Describe the financial performance section in neutral terms.
-
-Observation 2:
-Describe the risk analysis as analytical signals.
-
-Observation 3:
-Describe the forecast as a statistical estimate based on historical observations.
-
-Return exactly three lines.
-No numbering.
-No bullet points.
-No headings.
-No numbers.
-
-Verified financial facts:
-"""
-
-    prompt += f"""
+Financial facts:
 {sql_facts}
 
-Verified risk facts:
+Risk facts:
 {risk_facts}
 
-Verified forecast facts:
+Forecast facts:
 {forecast_facts}
+
+Return only the observation.
 """
 
-    response = llm.invoke(prompt)
+    try:
 
-    lines = [
-        line.strip()
-        for line in response.content.splitlines()
-        if line.strip()
-    ]
+        response = llm.invoke(prompt)
 
-    if len(lines) < 3:
-        return [
-            "The financial performance section summarizes verified transaction and amount metrics.",
-            "The risk section contains analytical signals derived from transaction and account activity.",
-            "The forecast section provides a statistical estimate based on the available historical observations.",
-        ]
+        content = getattr(
+            response,
+            "content",
+            "",
+        )
 
-    return lines[:3]
+        if isinstance(
+            content,
+            list,
+        ):
+
+            content = " ".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict)
+            )
+
+        content = str(content).strip()
+
+        if not content:
+            return ""
+
+        if contains_numeric_content(
+            content
+        ):
+            return ""
+
+        return content
+
+    except Exception:
+        return ""
+
+
+def extract_historical_values(
+    historical_days: list[Any]
+) -> list[float]:
+
+    values = []
+
+    for item in historical_days:
+
+        if isinstance(item, dict):
+
+            value = item.get(
+                "transactions"
+            )
+
+        elif (
+            isinstance(item, (tuple, list))
+            and len(item) >= 2
+        ):
+
+            value = item[1]
+
+        else:
+
+            continue
+
+        if isinstance(
+            value,
+            (int, float),
+        ):
+
+            values.append(
+                float(value)
+            )
+
+    return values
+
+
+def build_fallback_insight(
+    sql_facts: dict[str, Any],
+    risk_facts: dict[str, Any],
+    forecast_facts: dict[str, Any],
+) -> str:
+
+    sections = []
+
+    # ---------------------------------------------------------
+    # Financial activity
+    # ---------------------------------------------------------
+
+    if sql_facts:
+
+        received = sql_facts.get(
+            "total_amount_received"
+        )
+
+        paid = sql_facts.get(
+            "total_amount_paid"
+        )
+
+        if (
+            isinstance(received, (int, float))
+            and isinstance(paid, (int, float))
+        ):
+
+            if received > paid:
+
+                sections.append(
+                    "Transaction activity shows total incoming value above total outgoing value."
+                )
+
+            elif received < paid:
+
+                sections.append(
+                    "Transaction activity shows total outgoing value above total incoming value."
+                )
+
+            else:
+
+                sections.append(
+                    "Incoming and outgoing transaction values are broadly balanced."
+                )
+
+    # ---------------------------------------------------------
+    # Risk signals
+    # ---------------------------------------------------------
+
+    if risk_facts:
+
+        high_value = risk_facts.get(
+            "high_value_transactions"
+        )
+
+        high_frequency = risk_facts.get(
+            "high_frequency_accounts"
+        )
+
+        if (
+            isinstance(
+                high_value,
+                (int, float),
+            )
+            and high_value > 0
+        ) or (
+            isinstance(
+                high_frequency,
+                (int, float),
+            )
+            and high_frequency > 0
+        ):
+
+            sections.append(
+                "The dataset contains high-value and high-frequency activity signals. These indicators require contextual review and do not by themselves establish financial crime."
+            )
+
+    # ---------------------------------------------------------
+    # Forecast / recent activity
+    # ---------------------------------------------------------
+
+    if forecast_facts:
+
+        historical_days = (
+            forecast_facts.get(
+                "historical_days",
+                [],
+            )
+        )
+
+        values = extract_historical_values(
+            historical_days
+        )
+
+        if len(values) >= 2:
+
+            previous_value = values[-2]
+            latest_value = values[-1]
+
+            if latest_value < previous_value:
+
+                sections.append(
+                    "Recent transaction volume is lower than the immediately preceding observation."
+                )
+
+            elif latest_value > previous_value:
+
+                sections.append(
+                    "Recent transaction volume is higher than the immediately preceding observation."
+                )
+
+            else:
+
+                sections.append(
+                    "Recent transaction volume is unchanged relative to the immediately preceding observation."
+                )
+
+        # -----------------------------------------------------
+        # Forecast data quality warning
+        # -----------------------------------------------------
+
+        data_quality_status = (
+            forecast_facts.get(
+                "data_quality_status"
+            )
+        )
+
+        if data_quality_status == "WARNING":
+
+            sections.append(
+                "The forecast has limited historical support and should be interpreted with caution."
+            )
+
+    # ---------------------------------------------------------
+    # Final fallback
+    # ---------------------------------------------------------
+
+    if not sections:
+
+        return (
+            "The available agent outputs do not provide enough evidence for a specific analytical observation."
+        )
+
+    return " ".join(
+        sections[:3]
+    )
 
 
 def run_insight_agent(
-    sql_result: dict,
-    risk_result: dict,
-    forecast_result: dict,
-) -> str:
+    sql_result: dict[str, Any] | None = None,
+    risk_result: dict[str, Any] | None = None,
+    forecast_result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
 
-    sql = extract_sql_facts(sql_result)
-    risk = extract_risk_facts(risk_result)
-    forecast = extract_forecast_facts(forecast_result)
-
-    llm_insights = generate_llm_insight(
-        sql,
-        risk,
-        forecast,
+    sql_result = (
+        sql_result
+        or {}
     )
 
-    report = f"""
-### Financial Performance
+    risk_result = (
+        risk_result
+        or {}
+    )
 
-- Transaction count: {format_number(sql["transaction_count"])}
-- Total amount received: {format_number(sql["total_amount_received"])}
-- Total amount paid: {format_number(sql["total_amount_paid"])}
-- Average transaction amount: {format_number(sql["average_transaction_amount"])}
-- Laundering-tagged transactions: {format_number(sql["laundering_transaction_count"])}
-- AI-generated observation: {llm_insights[0]}
+    forecast_result = (
+        forecast_result
+        or {}
+    )
 
-### Risk & Anomaly Findings
+    sql_facts = extract_sql_facts(
+        sql_result
+    )
 
-- High-value transaction threshold: {format_number(risk["amount_threshold"])}
-- High-value transactions: {format_number(risk["high_value_transactions"])}
-- High-value laundering transactions: {format_number(risk["high_value_laundering"])}
-- High-value laundering rate: {format_number(risk["high_value_laundering_rate"])}%
-- High-frequency accounts: {format_number(risk["high_frequency_accounts"])}
-- Transactions from high-frequency accounts: {format_number(risk["transactions_from_high_frequency_accounts"])}
-- The 1,010 high-value laundering transactions are part of the 884,251 high-value transactions.
-- The risk indicators are analytical signals and are not proof of financial crime.
-- AI-generated observation: {llm_insights[1]}
+    risk_facts = extract_risk_facts(
+        risk_result
+    )
 
-### Forecast
+    forecast_facts = extract_forecast_facts(
+        forecast_result
+    )
 
-- Selected model: {forecast["selected_model"]}
-- Forecasting method: {forecast["method"]}
-- Test observation count: {format_number(forecast["backtest_test_observations"])}
-- Forecast next-day transactions: {format_number(forecast["forecast_next_day_transactions"])}
-- Selected model MAE: {format_number(forecast["backtest_mae"])}
-- Primary baseline method: {forecast["baseline_method"]}
-- Primary baseline MAE: {format_number(forecast["baseline_mae"])}
-- Improvement versus primary baseline: {format_number(forecast["improvement_vs_baseline"])}%
-- AI-generated observation: {llm_insights[2]}
-- Limitation: The forecast is based on a limited historical dataset, including a sequence of declining daily transaction counts in the available observations.
+    insight = generate_llm_insight(
+        sql_facts,
+        risk_facts,
+        forecast_facts,
+    )
 
-### Key Management Takeaways
+    if not insight:
 
-1. The financial performance section contains verified transaction and amount metrics.
-2. The risk section contains analytical risk indicators and dataset labels.
-3. The forecast section provides a statistical next-day estimate based on the available historical observations.
-"""
+        insight = build_fallback_insight(
+            sql_facts,
+            risk_facts,
+            forecast_facts,
+        )
 
-    return report.strip()
+    return {
+        "insight": insight,
+
+        "sql_facts":
+            sql_facts,
+
+        "risk_facts":
+            risk_facts,
+
+        "forecast_facts":
+            forecast_facts,
+    }

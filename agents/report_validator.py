@@ -3,27 +3,28 @@ from decimal import Decimal, InvalidOperation
 
 
 NUMBER_PATTERN = re.compile(
-    r"(?<![\w.])"
-    r"-?\d+(?:,\d{3})*(?:\.\d+)?"
-    r"%?"
+    r"(?<![\w.])-?\d+(?:,\d{3})*(?:\.\d+)?%?"
 )
-
 
 DATE_PATTERN = re.compile(
     r"\b\d{4}/\d{2}/\d{2}\b"
 )
 
-
 TIMESTAMP_PATTERN = re.compile(
     r"\b\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\b"
 )
 
+# Account IDs in the Risk report are identifiers, not numeric metrics.
+# Examples:
+# 100428660
+# 1004286A8
+# 1004286F0
+ACCOUNT_ID_PATTERN = re.compile(
+    r"\b100428[A-Za-z0-9]+\b"
+)
+
 
 def parse_number(value):
-    """
-    Convert a numeric value/string into Decimal.
-    """
-
     try:
         return Decimal(
             str(value)
@@ -36,10 +37,6 @@ def parse_number(value):
 
 
 def normalize_number(value) -> str:
-    """
-    Normalize numeric values for comparison.
-    """
-
     number = parse_number(value)
 
     if number is None:
@@ -57,9 +54,6 @@ def numbers_match(
     report_value: str,
     verified_value: str,
 ) -> bool:
-    """
-    Compare two numeric values using controlled tolerance.
-    """
 
     report_number = parse_number(
         report_value
@@ -69,7 +63,10 @@ def numbers_match(
         verified_value
     )
 
-    if report_number is None or verified_number is None:
+    if (
+        report_number is None
+        or verified_number is None
+    ):
         return False
 
     absolute_difference = abs(
@@ -80,7 +77,6 @@ def numbers_match(
         return True
 
     if verified_number != 0:
-
         relative_difference = (
             absolute_difference
             / abs(verified_number)
@@ -92,42 +88,51 @@ def numbers_match(
     return False
 
 
-def remove_non_data_numbers(text: str) -> str:
-    """
-    Remove dates, timestamps, markdown structural numbers,
-    and methodology labels before extracting report numbers.
-    """
+def remove_non_data_numbers(
+    text: str,
+) -> str:
 
     lines = text.splitlines()
-
     cleaned_lines = []
 
     for line in lines:
-
         stripped = line.strip()
 
+        # Remove generated timestamp.
         stripped = TIMESTAMP_PATTERN.sub(
             "",
             stripped,
         )
 
+        # Remove historical dates.
         stripped = DATE_PATTERN.sub(
             "",
             stripped,
         )
 
+        # Remove Account IDs.
+        # They are identifiers and must not participate
+        # in numerical integrity validation.
+        stripped = ACCOUNT_ID_PATTERN.sub(
+            "",
+            stripped,
+        )
+
+        # Remove Markdown list numbering.
         stripped = re.sub(
             r"^\d+\.\s+",
             "",
             stripped,
         )
 
+        # Remove numeric heading prefixes.
         stripped = re.sub(
-            r"^(#{1,6})\s*\d+\.?\s*",
+            r"^(#{1,6})\s+\d+\.\s+",
             r"\1 ",
             stripped,
         )
 
+        # Prevent "7-day" from being treated as data.
         stripped = re.sub(
             r"\b7-day\b",
             "moving-average",
@@ -144,10 +149,9 @@ def remove_non_data_numbers(text: str) -> str:
     )
 
 
-def extract_numbers(text: str) -> list[str]:
-    """
-    Extract numerical values from the report.
-    """
+def extract_numbers(
+    text: str,
+) -> list[str]:
 
     cleaned_text = remove_non_data_numbers(
         text
@@ -167,9 +171,6 @@ def add_numeric_value(
     verified: set[str],
     value,
 ) -> None:
-    """
-    Add a numeric value to the verified set.
-    """
 
     if isinstance(value, bool):
         return
@@ -178,7 +179,6 @@ def add_numeric_value(
         value,
         (int, float, Decimal),
     ):
-
         verified.add(
             normalize_number(value)
         )
@@ -189,34 +189,28 @@ def build_verified_number_set(
     risk_result: dict,
     forecast_result: dict,
 ) -> set[str]:
-    """
-    Build the complete set of numerical values verified
-    by upstream agents.
-    """
 
     verified = set()
 
-    # =========================================================
-    # SQL Agent
-    # =========================================================
+    # ---------------------------------------------------------
+    # SQL numbers
+    # ---------------------------------------------------------
 
     sql_rows = sql_result.get(
         "rows",
-        []
+        [],
     )
 
     for row in sql_rows:
-
         for value in row:
-
             add_numeric_value(
                 verified,
                 value,
             )
 
-    # =========================================================
-    # Risk Agent
-    # =========================================================
+    # ---------------------------------------------------------
+    # Risk numbers
+    # ---------------------------------------------------------
 
     risk_numeric_fields = [
         "amount_threshold",
@@ -229,38 +223,44 @@ def build_verified_number_set(
     ]
 
     for field in risk_numeric_fields:
-
         add_numeric_value(
             verified,
             risk_result.get(field),
         )
 
-    # =========================================================
-    # Top High-Frequency Accounts
-    # =========================================================
+    # Account IDs are intentionally NOT added.
+    # They are identifiers, not numerical metrics.
 
     top_accounts = risk_result.get(
         "top_high_frequency_accounts",
-        []
+        [],
     )
 
     for account in top_accounts:
-
-        if isinstance(
+        if not isinstance(
             account,
             (list, tuple),
         ):
+            continue
 
-            for value in account:
+        # Expected structure:
+        # (
+        #     account_id,
+        #     transaction_count,
+        #     frequency_threshold,
+        #     laundering_rate,
+        # )
 
-                add_numeric_value(
-                    verified,
-                    value,
-                )
+        # Skip account_id at index 0.
+        for value in account[1:]:
+            add_numeric_value(
+                verified,
+                value,
+            )
 
-    # =========================================================
-    # Forecast Agent
-    # =========================================================
+    # ---------------------------------------------------------
+    # Forecast numbers
+    # ---------------------------------------------------------
 
     forecast_numeric_fields = [
         "alpha",
@@ -276,23 +276,21 @@ def build_verified_number_set(
     ]
 
     for field in forecast_numeric_fields:
-
         add_numeric_value(
             verified,
             forecast_result.get(field),
         )
 
-    # =========================================================
-    # Candidate Models
-    # =========================================================
+    # ---------------------------------------------------------
+    # Candidate model numbers
+    # ---------------------------------------------------------
 
     candidate_models = forecast_result.get(
         "candidate_models",
-        []
+        [],
     )
 
     for candidate in candidate_models:
-
         if not isinstance(
             candidate,
             dict,
@@ -303,23 +301,21 @@ def build_verified_number_set(
             "mae",
             "alpha",
         ]:
-
             add_numeric_value(
                 verified,
                 candidate.get(field),
             )
 
-    # =========================================================
-    # SES Results
-    # =========================================================
+    # ---------------------------------------------------------
+    # SES alpha results
+    # ---------------------------------------------------------
 
     ses_results = forecast_result.get(
         "ses_alpha_results",
-        []
+        [],
     )
 
     for result in ses_results:
-
         if not isinstance(
             result,
             dict,
@@ -330,30 +326,26 @@ def build_verified_number_set(
             "alpha",
             "mae",
         ]:
-
             add_numeric_value(
                 verified,
                 result.get(field),
             )
 
-    # =========================================================
-    # Historical Observations
-    # =========================================================
+    # ---------------------------------------------------------
+    # Historical observations
+    # ---------------------------------------------------------
 
     historical_days = forecast_result.get(
         "historical_days",
-        []
+        [],
     )
 
     for row in historical_days:
-
         if isinstance(
             row,
             (list, tuple),
         ):
-
             for value in row:
-
                 add_numeric_value(
                     verified,
                     value,
@@ -364,30 +356,59 @@ def build_verified_number_set(
 
 def validate_required_sections(
     report: str,
+    sql_result: dict,
+    risk_result: dict,
+    forecast_result: dict,
 ) -> list[str]:
+
     """
-    Validate that all required report sections exist.
+    Validate only the sections corresponding to
+    analytical results that actually exist.
     """
 
     required_sections = [
         "## Executive Summary",
-        "## Financial Performance",
-        "## Risk & Anomaly Analysis",
-        "## Forecast",
-        "### Candidate Model Comparison",
-        "### Forecast Validation",
-        "### Historical Daily Observations",
         "## AI-Generated Insights",
         "## Management Actions",
         "## Data & Methodology",
     ]
 
+    if sql_result:
+        required_sections.append(
+            "## Financial Performance"
+        )
+
+    if risk_result:
+        required_sections.append(
+            "## Risk & Anomaly Analysis"
+        )
+
+    if forecast_result:
+        required_sections.extend(
+            [
+                "## Forecast",
+                "### Forecast Validation",
+            ]
+        )
+
+        if forecast_result.get(
+            "candidate_models"
+        ):
+            required_sections.append(
+                "### Candidate Model Comparison"
+            )
+
+        if forecast_result.get(
+            "historical_days"
+        ):
+            required_sections.append(
+                "### Historical Daily Observations"
+            )
+
     missing_sections = []
 
     for section in required_sections:
-
         if section not in report:
-
             missing_sections.append(
                 section
             )
@@ -401,64 +422,64 @@ def validate_consistency(
     risk_result: dict,
     forecast_result: dict,
 ) -> list[str]:
-    """
-    Validate critical relationships between agent outputs
-    and the generated report.
-    """
 
     errors = []
 
-    # =========================================================
+    # ---------------------------------------------------------
     # Risk consistency
-    # =========================================================
+    # ---------------------------------------------------------
 
-    high_value_transactions = risk_result.get(
-        "high_value_transactions"
-    )
+    if risk_result:
 
-    high_value_laundering = risk_result.get(
-        "high_value_laundering"
-    )
-
-    if (
-        isinstance(
-            high_value_transactions,
-            (int, float),
+        high_value_transactions = risk_result.get(
+            "high_value_transactions"
         )
-        and isinstance(
-            high_value_laundering,
-            (int, float),
+
+        high_value_laundering = risk_result.get(
+            "high_value_laundering"
         )
-    ):
 
-        if high_value_laundering > high_value_transactions:
-
-            errors.append(
-                "High-value laundering transactions "
-                "cannot exceed high-value transactions."
+        if (
+            isinstance(
+                high_value_transactions,
+                (int, float),
             )
-
-    # =========================================================
-    # Forecast model consistency
-    # =========================================================
-
-    selected_model = forecast_result.get(
-        "selected_model"
-    )
-
-    candidate_models = forecast_result.get(
-        "candidate_models",
-        []
-    )
-
-    candidate_names = []
-
-    for candidate in candidate_models:
-
-        if isinstance(
-            candidate,
-            dict,
+            and isinstance(
+                high_value_laundering,
+                (int, float),
+            )
         ):
+            if (
+                high_value_laundering
+                > high_value_transactions
+            ):
+                errors.append(
+                    "High-value laundering transactions cannot exceed high-value transactions."
+                )
+
+    # ---------------------------------------------------------
+    # Forecast consistency
+    # ---------------------------------------------------------
+
+    if forecast_result:
+
+        selected_model = forecast_result.get(
+            "selected_model"
+        )
+
+        candidate_models = forecast_result.get(
+            "candidate_models",
+            [],
+        )
+
+        candidate_names = []
+
+        for candidate in candidate_models:
+            if not isinstance(
+                candidate,
+                dict,
+            ):
+                continue
 
             name = candidate.get(
                 "method"
@@ -469,74 +490,61 @@ def validate_consistency(
                     name
                 )
 
-    if (
-        selected_model
-        and candidate_names
-        and selected_model not in candidate_names
-    ):
-
-        errors.append(
-            "Selected forecasting model is not "
-            "present in the candidate model results."
-        )
-
-    # =========================================================
-    # Forecast value consistency
-    # =========================================================
-
-    forecast_value = forecast_result.get(
-        "forecast_next_day_transactions"
-    )
-
-    if forecast_value is not None:
-
-        forecast_text = str(
-            forecast_value
-        )
-
-        report_forecast_pattern = re.search(
-            r"Forecast Next-Day Transactions:\s*([0-9,.\-]+)",
-            report,
-            flags=re.IGNORECASE,
-        )
-
-        if report_forecast_pattern:
-
-            report_forecast_value = (
-                report_forecast_pattern.group(1)
+        if (
+            selected_model
+            and candidate_names
+            and selected_model not in candidate_names
+        ):
+            errors.append(
+                "Selected forecasting model is not present in the candidate model results."
             )
 
-            if not numbers_match(
-                report_forecast_value,
-                str(forecast_value),
-            ):
+        forecast_value = forecast_result.get(
+            "forecast_next_day_transactions"
+        )
 
-                errors.append(
-                    "Report forecast value does not "
-                    "match the Forecast Agent output."
+        if forecast_value is not None:
+
+            report_forecast_pattern = re.search(
+                r"Forecast Next-Day Transactions:\s*\*?([0-9,.\-]+)",
+                report,
+                flags=re.IGNORECASE,
+            )
+
+            if report_forecast_pattern:
+
+                report_forecast_value = (
+                    report_forecast_pattern.group(1)
                 )
 
-        else:
+                if not numbers_match(
+                    report_forecast_value,
+                    str(forecast_value),
+                ):
+                    errors.append(
+                        "Report forecast value does not match the Forecast Agent output."
+                    )
 
-            errors.append(
-                "Forecast next-day transaction value "
-                "is missing from the report."
-            )
+            else:
+                errors.append(
+                    "Forecast next-day transaction value is missing from the report."
+                )
 
-    # =========================================================
-    # SQL result existence
-    # =========================================================
+    # ---------------------------------------------------------
+    # SQL consistency
+    # ---------------------------------------------------------
 
-    sql_rows = sql_result.get(
-        "rows",
-        []
-    )
+    if sql_result:
 
-    if not sql_rows:
-
-        errors.append(
-            "SQL Agent returned no rows."
+        sql_rows = sql_result.get(
+            "rows",
+            [],
         )
+
+        if not sql_rows:
+            errors.append(
+                "SQL Agent returned no rows."
+            )
 
     return errors
 
@@ -547,25 +555,42 @@ def validate_report(
     risk_result: dict,
     forecast_result: dict,
 ) -> dict:
-    """
-    Run complete deterministic report validation.
 
-    Validation layers:
+    has_sql = bool(sql_result)
+    has_risk = bool(risk_result)
+    has_forecast = bool(forecast_result)
 
-        1. Numerical integrity
-        2. Required section integrity
-        3. Critical consistency checks
-    """
+    if not (
+        has_sql
+        or has_risk
+        or has_forecast
+    ):
+        return {
+            "valid": False,
+            "numerical_integrity": False,
+            "section_integrity": False,
+            "consistency_integrity": False,
+            "invalid_numbers": [],
+            "missing_sections": [],
+            "consistency_errors": [
+                "No analytical agent results were provided."
+            ],
+            "verified_numbers": [],
+        }
 
-    # =========================================================
-    # Numerical validation
-    # =========================================================
+    # ---------------------------------------------------------
+    # Build verified numerical values
+    # ---------------------------------------------------------
 
     verified_numbers = build_verified_number_set(
         sql_result=sql_result,
         risk_result=risk_result,
         forecast_result=forecast_result,
     )
+
+    # ---------------------------------------------------------
+    # Extract numerical values from report
+    # ---------------------------------------------------------
 
     report_numbers = extract_numbers(
         report
@@ -580,12 +605,10 @@ def validate_report(
                 report_number,
                 verified_number,
             )
-            for verified_number
-            in verified_numbers
+            for verified_number in verified_numbers
         )
 
         if not matched:
-
             invalid_numbers.append(
                 report_number
             )
@@ -594,40 +617,39 @@ def validate_report(
         len(invalid_numbers) == 0
     )
 
-    # =========================================================
-    # Section validation
-    # =========================================================
+    # ---------------------------------------------------------
+    # Section integrity
+    # ---------------------------------------------------------
 
-    missing_sections = (
-        validate_required_sections(
-            report
-        )
+    missing_sections = validate_required_sections(
+        report=report,
+        sql_result=sql_result,
+        risk_result=risk_result,
+        forecast_result=forecast_result,
     )
 
     section_integrity = (
         len(missing_sections) == 0
     )
 
-    # =========================================================
-    # Consistency validation
-    # =========================================================
+    # ---------------------------------------------------------
+    # Consistency integrity
+    # ---------------------------------------------------------
 
-    consistency_errors = (
-        validate_consistency(
-            report=report,
-            sql_result=sql_result,
-            risk_result=risk_result,
-            forecast_result=forecast_result,
-        )
+    consistency_errors = validate_consistency(
+        report=report,
+        sql_result=sql_result,
+        risk_result=risk_result,
+        forecast_result=forecast_result,
     )
 
     consistency_integrity = (
         len(consistency_errors) == 0
     )
 
-    # =========================================================
+    # ---------------------------------------------------------
     # Final validation
-    # =========================================================
+    # ---------------------------------------------------------
 
     valid = (
         numerical_integrity
