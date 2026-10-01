@@ -1,8 +1,9 @@
 import html
+
 import pandas as pd
 import streamlit as st
 
-from agents.supervisor import run_cfo
+from workflows.graph import run_cfo
 
 
 # ============================================================
@@ -433,19 +434,26 @@ def safe_number(value, default=None):
             return default
 
         return number
+
     except (TypeError, ValueError):
         return default
 
 
 def format_number(value, decimals=2):
     number = safe_number(value)
+
     if number is None:
         return "—"
-    return f"{number:,.{decimals}f}" if decimals else f"{number:,.0f}"
+
+    if decimals:
+        return f"{number:,.{decimals}f}"
+
+    return f"{number:,.0f}"
 
 
 def compact_number(value):
     number = safe_number(value)
+
     if number is None:
         return "—"
 
@@ -453,10 +461,13 @@ def compact_number(value):
 
     if absolute >= 1_000_000_000_000:
         return f"{number / 1_000_000_000_000:.2f}T"
+
     if absolute >= 1_000_000_000:
         return f"{number / 1_000_000_000:.2f}B"
+
     if absolute >= 1_000_000:
         return f"{number / 1_000_000:.2f}M"
+
     if absolute >= 1_000:
         return f"{number / 1_000:.2f}K"
 
@@ -496,6 +507,13 @@ def get_validation(result):
     if not isinstance(result, dict):
         return {}
 
+    # Current LangGraph state uses "validation".
+    value = result.get("validation")
+
+    if isinstance(value, dict):
+        return value
+
+    # Backward compatibility.
     value = result.get("validation_result")
 
     if isinstance(value, dict):
@@ -515,8 +533,15 @@ def normalize_report(report):
         return report.strip()
 
     if isinstance(report, dict):
-        for key in ["report", "content", "text", "message", "insight"]:
+        for key in [
+            "report",
+            "content",
+            "text",
+            "message",
+            "insight",
+        ]:
             value = report.get(key)
+
             if value:
                 return str(value).strip()
 
@@ -527,8 +552,13 @@ def get_report(result):
     if not isinstance(result, dict):
         return ""
 
-    for key in ["report", "final_report", "management_report"]:
+    for key in [
+        "report",
+        "final_report",
+        "management_report",
+    ]:
         value = result.get(key)
+
         if value:
             return normalize_report(value)
 
@@ -547,6 +577,7 @@ def get_insight(result):
         "business_insights",
     ]:
         value = result.get(key)
+
         if value:
             return normalize_report(value)
 
@@ -566,14 +597,19 @@ def normalize_agent_name(agent_name):
     aliases = {
         "SQL_AGENT": "SQL",
         "SQL": "SQL",
+
         "RISK_AGENT": "RISK",
         "RISK": "RISK",
+
         "FORECAST_AGENT": "FORECAST",
         "FORECAST": "FORECAST",
+
         "INSIGHT_AGENT": "INSIGHT",
         "INSIGHT": "INSIGHT",
+
         "REPORT_AGENT": "REPORT",
         "REPORT": "REPORT",
+
         "REPORT_VALIDATOR": "VALIDATOR",
         "REPORT VALIDATOR": "VALIDATOR",
         "VALIDATOR": "VALIDATOR",
@@ -583,6 +619,9 @@ def normalize_agent_name(agent_name):
 
 
 def normalize_agent_list(agents):
+    if isinstance(agents, str):
+        agents = agents.split(",")
+
     if not isinstance(agents, list):
         return []
 
@@ -590,22 +629,61 @@ def normalize_agent_list(agents):
 
     for agent in agents:
         name = normalize_agent_name(agent)
+
         if name and name not in normalized:
             normalized.append(name)
 
     return normalized
 
 
-def get_executed_agents(result):
-    if not isinstance(result, dict):
-        return []
-    return normalize_agent_list(result.get("executed_agents", []))
-
-
 def get_selected_agents(result):
+    """
+    Read Supervisor routing information.
+
+    The current graph stores the Supervisor output
+    in the "next_agent" state field.
+    """
+
     if not isinstance(result, dict):
         return []
-    return normalize_agent_list(result.get("selected_agents", []))
+
+    next_agent = result.get("next_agent", "")
+
+    return normalize_agent_list(next_agent)
+
+
+def get_executed_agents(result):
+    """
+    Infer executed agents from the current CFOState.
+
+    This keeps the UI compatible with the current graph
+    without requiring extra execution-tracking fields.
+    """
+
+    if not isinstance(result, dict):
+        return []
+
+    executed = []
+
+    if result.get("sql_result"):
+        executed.append("SQL")
+
+    if result.get("risk_result"):
+        executed.append("RISK")
+
+    if result.get("forecast_result"):
+        executed.append("FORECAST")
+
+    if result.get("insight"):
+        executed.append("INSIGHT")
+
+    if result.get("report"):
+        executed.append("REPORT")
+
+    if result.get("validation"):
+        executed.append("VALIDATOR")
+
+    return executed
 
 
 def agent_executed(result, agent):
@@ -716,6 +794,7 @@ def extract_financial_metrics(result):
 
     for metric_name, metric_aliases in aliases.items():
         key = find_metric(columns, metric_aliases)
+
         metrics[metric_name] = (
             safe_number(raw_metrics.get(key))
             if key
@@ -736,13 +815,22 @@ def extract_risk_metrics(result):
         "threshold": risk.get("amount_threshold"),
         "frequency_threshold": risk.get("frequency_threshold"),
         "high_value": risk.get("high_value_transactions"),
-        "high_value_laundering": risk.get("high_value_laundering"),
-        "rate": risk.get("high_value_laundering_rate"),
-        "high_frequency_accounts": risk.get("high_frequency_accounts"),
+        "high_value_laundering": risk.get(
+            "high_value_laundering"
+        ),
+        "rate": risk.get(
+            "high_value_laundering_rate"
+        ),
+        "high_frequency_accounts": risk.get(
+            "high_frequency_accounts"
+        ),
         "transactions_from_frequency": risk.get(
             "transactions_from_high_frequency_accounts"
         ),
-        "top_accounts": risk.get("top_high_frequency_accounts", []),
+        "top_accounts": risk.get(
+            "top_high_frequency_accounts",
+            [],
+        ),
     }
 
 
@@ -750,25 +838,67 @@ def extract_forecast_metrics(result):
     forecast = get_forecast_result(result)
 
     return {
-        "model": forecast.get("selected_model") or forecast.get("method"),
-        "forecast": forecast.get("forecast_next_day_transactions"),
-        "mae": forecast.get("backtest_mae"),
-        "observations": forecast.get("backtest_test_observations"),
-        "baseline_method": forecast.get("baseline_method"),
-        "baseline_mae": forecast.get("baseline_mae"),
-        "improvement": forecast.get("improvement_vs_baseline"),
-        "recent_3_day_average": forecast.get("recent_3_day_average"),
-        "recent_7_day_average": forecast.get("recent_7_day_average"),
+        "model": forecast.get("selected_model")
+        or forecast.get("method"),
+
+        "forecast": forecast.get(
+            "forecast_next_day_transactions"
+        ),
+
+        "mae": forecast.get(
+            "backtest_mae"
+        ),
+
+        "observations": forecast.get(
+            "backtest_test_observations"
+        ),
+
+        "baseline_method": forecast.get(
+            "baseline_method"
+        ),
+
+        "baseline_mae": forecast.get(
+            "baseline_mae"
+        ),
+
+        "improvement": forecast.get(
+            "improvement_vs_baseline"
+        ),
+
+        "recent_3_day_average": forecast.get(
+            "recent_3_day_average"
+        ),
+
+        "recent_7_day_average": forecast.get(
+            "recent_7_day_average"
+        ),
+
         "last_day_change_percentage": forecast.get(
             "last_day_change_percentage"
         ),
-        "data_quality_status": forecast.get("data_quality_status"),
-        "forecast_warning": forecast.get("forecast_warning"),
-        "data_quality_conditions": forecast.get(
-            "data_quality_conditions", []
+
+        "data_quality_status": forecast.get(
+            "data_quality_status"
         ),
-        "candidate_models": forecast.get("candidate_models", []),
-        "historical_days": forecast.get("historical_days", []),
+
+        "forecast_warning": forecast.get(
+            "forecast_warning"
+        ),
+
+        "data_quality_conditions": forecast.get(
+            "data_quality_conditions",
+            [],
+        ),
+
+        "candidate_models": forecast.get(
+            "candidate_models",
+            [],
+        ),
+
+        "historical_days": forecast.get(
+            "historical_days",
+            [],
+        ),
     }
 
 
@@ -784,7 +914,9 @@ def render_section(title, description=None):
 
     if description:
         st.markdown(
-            f'<div class="section-description">{safe_text(description)}</div>',
+            f'<div class="section-description">'
+            f'{safe_text(description)}'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -793,7 +925,11 @@ def render_kpi(label, value, sub=None):
     sub_html = ""
 
     if sub:
-        sub_html = f'<div class="kpi-sub">{safe_text(sub)}</div>'
+        sub_html = (
+            f'<div class="kpi-sub">'
+            f'{safe_text(sub)}'
+            f'</div>'
+        )
 
     st.markdown(
         '<div class="card">'
@@ -829,7 +965,9 @@ def render_dataframe(dataframe):
     )
 
     st.markdown(
-        f'<div class="cfo-table-wrapper">{html_table}</div>',
+        f'<div class="cfo-table-wrapper">'
+        f'{html_table}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -842,7 +980,12 @@ def render_analysis_context(result):
     if not isinstance(result, dict):
         return
 
-    question = result.get("question", "")
+    question = (
+        result.get("question")
+        or result.get("user_question")
+        or ""
+    )
+
     selected = get_selected_agents(result)
     executed = get_executed_agents(result)
 
@@ -865,8 +1008,18 @@ def render_analysis_context(result):
 
         for agent in selected:
             completed = agent in executed
-            badge_class = "badge-green" if completed else "badge-blue"
-            state = "Completed" if completed else "Selected"
+
+            badge_class = (
+                "badge-green"
+                if completed
+                else "badge-blue"
+            )
+
+            state = (
+                "Completed"
+                if completed
+                else "Selected"
+            )
 
             badges.append(
                 f'<span class="badge {badge_class}">'
@@ -904,31 +1057,43 @@ def render_financial_overview(result):
     with cols[0]:
         render_kpi(
             "Transactions",
-            format_number(metrics.get("transactions"), 0),
+            format_number(
+                metrics.get("transactions"),
+                0,
+            ),
         )
 
     with cols[1]:
         render_kpi(
             "Money Received",
-            compact_number(metrics.get("received")),
+            compact_number(
+                metrics.get("received")
+            ),
         )
 
     with cols[2]:
         render_kpi(
             "Money Paid",
-            compact_number(metrics.get("paid")),
+            compact_number(
+                metrics.get("paid")
+            ),
         )
 
     with cols[3]:
         render_kpi(
             "Average Transaction",
-            compact_number(metrics.get("average")),
+            compact_number(
+                metrics.get("average")
+            ),
         )
 
     with cols[4]:
         render_kpi(
             "Laundering Tagged",
-            format_number(metrics.get("laundering"), 0),
+            format_number(
+                metrics.get("laundering"),
+                0,
+            ),
         )
 
 
@@ -937,45 +1102,59 @@ def render_financial_overview(result):
 # ============================================================
 
 def render_key_findings(result):
-    executed = set(get_executed_agents(result))
+    executed = set(
+        get_executed_agents(result)
+    )
+
     findings = []
 
     if "RISK" in executed:
         risk = extract_risk_metrics(result)
 
-        high_value = safe_number(risk.get("high_value"))
+        high_value = safe_number(
+            risk.get("high_value")
+        )
+
         high_value_laundering = safe_number(
             risk.get("high_value_laundering")
         )
-        rate = safe_number(risk.get("rate"))
+
+        rate = safe_number(
+            risk.get("rate")
+        )
 
         if high_value is not None:
             findings.append(
-                f"{format_number(high_value, 0)} high-value transactions "
-                "were identified using the analytical amount threshold."
+                f"{format_number(high_value, 0)} "
+                "high-value transactions were identified "
+                "using the analytical amount threshold."
             )
 
         if high_value_laundering is not None:
             findings.append(
-                f"{format_number(high_value_laundering, 0)} high-value "
-                "transactions were laundering-tagged."
+                f"{format_number(high_value_laundering, 0)} "
+                "high-value transactions were "
+                "laundering-tagged."
             )
 
         if rate is not None:
             findings.append(
-                "The laundering-tagged rate within the high-value group "
-                f"is {rate:.2f}%."
+                "The laundering-tagged rate within the "
+                f"high-value group is {rate:.2f}%."
             )
 
     if "FORECAST" in executed:
         forecast = extract_forecast_metrics(result)
-        forecast_value = safe_number(forecast.get("forecast"))
+
+        forecast_value = safe_number(
+            forecast.get("forecast")
+        )
 
         if forecast_value is not None:
             findings.append(
                 "The selected forecasting method estimates "
-                f"{format_number(forecast_value, 0)} transactions "
-                "for the next observation."
+                f"{format_number(forecast_value, 0)} "
+                "transactions for the next observation."
             )
 
     if not findings:
@@ -988,7 +1167,9 @@ def render_key_findings(result):
 
     for finding in findings:
         st.markdown(
-            f'<div class="finding">{safe_text(finding)}</div>',
+            f'<div class="finding">'
+            f'{safe_text(finding)}'
+            f'</div>',
             unsafe_allow_html=True,
         )
 
@@ -1008,7 +1189,10 @@ def render_insight(result):
         "Business observations produced by the Insight Agent.",
     )
 
-    safe_insight = safe_text(insight).replace("\n", "<br>")
+    safe_insight = safe_text(
+        insight
+    ).replace("\n", "<br>")
+
     st.markdown(
         '<div class="insight-card">'
         f'{safe_insight}'
@@ -1037,7 +1221,10 @@ def render_risk_summary(result):
         ]
     ]
 
-    if not any(value is not None for value in values):
+    if not any(
+        value is not None
+        for value in values
+    ):
         render_empty(
             "Risk analysis unavailable",
             "No risk indicators were returned for this analysis.",
@@ -1054,26 +1241,44 @@ def render_risk_summary(result):
     with cols[0]:
         render_kpi(
             "High-Value Transactions",
-            format_number(risk.get("high_value"), 0),
+            format_number(
+                risk.get("high_value"),
+                0,
+            ),
         )
 
     with cols[1]:
         render_kpi(
             "High-Value Laundering",
-            format_number(risk.get("high_value_laundering"), 0),
+            format_number(
+                risk.get("high_value_laundering"),
+                0,
+            ),
         )
 
     with cols[2]:
-        rate = safe_number(risk.get("rate"))
+        rate = safe_number(
+            risk.get("rate")
+        )
+
         render_kpi(
             "High-Value Laundering Rate",
-            f"{rate:.2f}%" if rate is not None else "—",
+            (
+                f"{rate:.2f}%"
+                if rate is not None
+                else "—"
+            ),
         )
 
     with cols[3]:
         render_kpi(
             "High-Frequency Accounts",
-            format_number(risk.get("high_frequency_accounts"), 0),
+            format_number(
+                risk.get(
+                    "high_frequency_accounts"
+                ),
+                0,
+            ),
         )
 
     cols2 = st.columns(3)
@@ -1081,29 +1286,50 @@ def render_risk_summary(result):
     with cols2[0]:
         render_kpi(
             "Amount Threshold",
-            format_number(risk.get("threshold"), 2),
+            format_number(
+                risk.get("threshold"),
+                2,
+            ),
         )
 
     with cols2[1]:
         render_kpi(
             "Frequency Threshold",
-            format_number(risk.get("frequency_threshold"), 0),
+            format_number(
+                risk.get(
+                    "frequency_threshold"
+                ),
+                0,
+            ),
         )
 
     with cols2[2]:
         render_kpi(
             "Transactions From High-Frequency Accounts",
-            format_number(risk.get("transactions_from_frequency"), 0),
+            format_number(
+                risk.get(
+                    "transactions_from_frequency"
+                ),
+                0,
+            ),
         )
 
     st.info(
-        "Risk indicators are analytical signals and do not establish fraud "
-        "or financial crime."
+        "Risk indicators are analytical signals and do not "
+        "establish fraud or financial crime."
     )
 
-    top_accounts = risk.get("top_accounts")
+    top_accounts = risk.get(
+        "top_accounts"
+    )
 
-    if not isinstance(top_accounts, list) or not top_accounts:
+    if (
+        not isinstance(
+            top_accounts,
+            list,
+        )
+        or not top_accounts
+    ):
         return
 
     render_section(
@@ -1114,16 +1340,32 @@ def render_risk_summary(result):
     rows = []
 
     for account in top_accounts:
-        if not isinstance(account, (list, tuple)) or len(account) < 4:
+        if (
+            not isinstance(
+                account,
+                (list, tuple),
+            )
+            or len(account) < 4
+        ):
             continue
 
-        transactions = safe_number(account[1])
-        laundering = safe_number(account[2])
-        laundering_rate = safe_number(account[3])
+        transactions = safe_number(
+            account[1]
+        )
+
+        laundering = safe_number(
+            account[2]
+        )
+
+        laundering_rate = safe_number(
+            account[3]
+        )
 
         rows.append(
             {
-                "Account": str(account[0]),
+                "Account": str(
+                    account[0]
+                ),
                 "Transactions": (
                     f"{transactions:,.0f}"
                     if transactions is not None
@@ -1143,17 +1385,24 @@ def render_risk_summary(result):
         )
 
     if rows:
-        render_dataframe(pd.DataFrame(rows))
+        render_dataframe(
+            pd.DataFrame(rows)
+        )
 
 
 # ============================================================
 # FORECAST VIEW
 # ============================================================
 
-def build_historical_dataframe(historical_days):
+def build_historical_dataframe(
+    historical_days
+):
     rows = []
 
-    if not isinstance(historical_days, list):
+    if not isinstance(
+        historical_days,
+        list,
+    ):
         return pd.DataFrame()
 
     for item in historical_days:
@@ -1166,22 +1415,39 @@ def build_historical_dataframe(historical_days):
                 or item.get("day")
                 or item.get("timestamp")
             )
-            count_value = (
-                item.get("transactions")
-                if item.get("transactions") is not None
-                else item.get("transaction_count")
+
+            count_value = item.get(
+                "transactions"
             )
 
             if count_value is None:
-                count_value = item.get("count")
+                count_value = item.get(
+                    "transaction_count"
+                )
 
-        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            if count_value is None:
+                count_value = item.get(
+                    "count"
+                )
+
+        elif (
+            isinstance(
+                item,
+                (list, tuple),
+            )
+            and len(item) >= 2
+        ):
             date_value = item[0]
             count_value = item[1]
 
-        numeric_count = safe_number(count_value)
+        numeric_count = safe_number(
+            count_value
+        )
 
-        if date_value is not None and numeric_count is not None:
+        if (
+            date_value is not None
+            and numeric_count is not None
+        ):
             parsed_date = pd.to_datetime(
                 date_value,
                 errors="coerce",
@@ -1199,24 +1465,35 @@ def build_historical_dataframe(historical_days):
         return pd.DataFrame()
 
     dataframe = pd.DataFrame(rows)
+
     return (
         dataframe
-        .drop_duplicates(subset=["Date"])
+        .drop_duplicates(
+            subset=["Date"]
+        )
         .sort_values("Date")
         .reset_index(drop=True)
     )
 
 
 def render_forecast(result):
-    forecast = extract_forecast_metrics(result)
+    forecast = extract_forecast_metrics(
+        result
+    )
 
     values = [
         value
         for key, value in forecast.items()
-        if key not in ["candidate_models", "historical_days"]
+        if key not in [
+            "candidate_models",
+            "historical_days",
+        ]
     ]
 
-    if not any(value is not None for value in values):
+    if not any(
+        value is not None
+        for value in values
+    ):
         render_empty(
             "Forecast unavailable",
             "No forecasting result was returned for this analysis.",
@@ -1233,44 +1510,83 @@ def render_forecast(result):
     with cols[0]:
         render_kpi(
             "Selected Model",
-            str(forecast.get("model") or "—"),
+            str(
+                forecast.get("model")
+                or "—"
+            ),
         )
 
     with cols[1]:
         render_kpi(
             "Next-Day Transactions",
-            format_number(forecast.get("forecast"), 0),
+            format_number(
+                forecast.get("forecast"),
+                0,
+            ),
         )
 
     with cols[2]:
         render_kpi(
             "Backtesting MAE",
-            format_number(forecast.get("mae"), 2),
+            format_number(
+                forecast.get("mae"),
+                2,
+            ),
         )
 
     with cols[3]:
         render_kpi(
             "Backtesting Observations",
-            format_number(forecast.get("observations"), 0),
+            format_number(
+                forecast.get(
+                    "observations"
+                ),
+                0,
+            ),
         )
 
     st.info(
-        "The forecast is a statistical estimate based on historical "
-        "transaction observations and is not a guaranteed future value."
+        "The forecast is a statistical estimate based on "
+        "historical transaction observations and is not "
+        "a guaranteed future value."
     )
 
-    forecast_warning = forecast.get("forecast_warning")
-    data_quality_status = forecast.get("data_quality_status")
+    forecast_warning = forecast.get(
+        "forecast_warning"
+    )
+
+    data_quality_status = forecast.get(
+        "data_quality_status"
+    )
 
     if forecast_warning:
-        if str(data_quality_status or "").upper() == "WARNING":
-            st.warning(str(forecast_warning))
+        if (
+            str(
+                data_quality_status
+                or ""
+            ).upper()
+            == "WARNING"
+        ):
+            st.warning(
+                str(forecast_warning)
+            )
         else:
-            st.caption(str(forecast_warning))
+            st.caption(
+                str(forecast_warning)
+            )
 
-    conditions = forecast.get("data_quality_conditions", [])
+    conditions = forecast.get(
+        "data_quality_conditions",
+        [],
+    )
 
-    if isinstance(conditions, list) and conditions:
+    if (
+        isinstance(
+            conditions,
+            list,
+        )
+        and conditions
+    ):
         render_section(
             "Forecast Data Quality",
             "Conditions reported by the Forecast Agent for the available history.",
@@ -1278,58 +1594,114 @@ def render_forecast(result):
 
         for condition in conditions:
             st.markdown(
-                f'<div class="finding">{safe_text(condition)}</div>',
+                f'<div class="finding">'
+                f'{safe_text(condition)}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-    baseline_method = forecast.get("baseline_method")
-    baseline_mae = safe_number(forecast.get("baseline_mae"))
-    improvement = safe_number(forecast.get("improvement"))
+    baseline_method = forecast.get(
+        "baseline_method"
+    )
 
-    if baseline_method and baseline_mae is not None:
+    baseline_mae = safe_number(
+        forecast.get(
+            "baseline_mae"
+        )
+    )
+
+    improvement = safe_number(
+        forecast.get(
+            "improvement"
+        )
+    )
+
+    if (
+        baseline_method
+        and baseline_mae is not None
+    ):
         text = (
             f"Primary baseline: {baseline_method} "
             f"with MAE {baseline_mae:,.2f}"
         )
 
         if improvement is not None:
-            text += f" · MAE difference versus baseline: {improvement:.2f}%"
+            text += (
+                f" · MAE difference versus baseline: "
+                f"{improvement:.2f}%"
+            )
 
-        st.caption(text + ".")
+        st.caption(
+            text + "."
+        )
 
-    recent_3 = safe_number(forecast.get("recent_3_day_average"))
-    recent_7 = safe_number(forecast.get("recent_7_day_average"))
-    last_change = safe_number(forecast.get("last_day_change_percentage"))
+    recent_3 = safe_number(
+        forecast.get(
+            "recent_3_day_average"
+        )
+    )
+
+    recent_7 = safe_number(
+        forecast.get(
+            "recent_7_day_average"
+        )
+    )
+
+    last_change = safe_number(
+        forecast.get(
+            "last_day_change_percentage"
+        )
+    )
 
     if any(
         value is not None
-        for value in [recent_3, recent_7, last_change]
+        for value in [
+            recent_3,
+            recent_7,
+            last_change,
+        ]
     ):
         recent_cols = st.columns(3)
 
         with recent_cols[0]:
             render_kpi(
                 "Recent 3-Day Average",
-                format_number(recent_3, 2),
+                format_number(
+                    recent_3,
+                    2,
+                ),
             )
 
         with recent_cols[1]:
             render_kpi(
                 "Recent 7-Day Average",
-                format_number(recent_7, 2),
+                format_number(
+                    recent_7,
+                    2,
+                ),
             )
 
         with recent_cols[2]:
             render_kpi(
                 "Last-Day Change",
-                f"{last_change:.2f}%"
-                if last_change is not None
-                else "—",
+                (
+                    f"{last_change:.2f}%"
+                    if last_change is not None
+                    else "—"
+                ),
             )
 
-    candidate_models = forecast.get("candidate_models")
+    candidate_models = forecast.get(
+        "candidate_models"
+    )
 
-    if isinstance(candidate_models, list) and candidate_models:
+    if (
+        isinstance(
+            candidate_models,
+            list,
+        )
+        and candidate_models
+    ):
         render_section(
             "Candidate Model Comparison",
             "Models evaluated during the forecasting workflow.",
@@ -1338,35 +1710,66 @@ def render_forecast(result):
         rows = []
 
         for item in candidate_models:
-            if not isinstance(item, dict):
+            if not isinstance(
+                item,
+                dict,
+            ):
                 continue
 
             row = {}
 
             for key, value in item.items():
-                clean_key = str(key).replace("_", " ").title()
+                clean_key = (
+                    str(key)
+                    .replace("_", " ")
+                    .title()
+                )
 
-                numeric_value = safe_number(value)
+                numeric_value = safe_number(
+                    value
+                )
 
                 if numeric_value is not None:
-                    if "mae" in str(key).lower():
-                        row[clean_key] = f"{numeric_value:,.2f}"
-                    elif "alpha" in str(key).lower():
-                        row[clean_key] = f"{numeric_value:.4f}"
+                    if "mae" in str(
+                        key
+                    ).lower():
+                        row[clean_key] = (
+                            f"{numeric_value:,.2f}"
+                        )
+
+                    elif "alpha" in str(
+                        key
+                    ).lower():
+                        row[clean_key] = (
+                            f"{numeric_value:.4f}"
+                        )
+
                     else:
-                        row[clean_key] = f"{numeric_value:,.2f}"
-                elif value is None or str(value).lower() == "nan":
+                        row[clean_key] = (
+                            f"{numeric_value:,.2f}"
+                        )
+
+                elif (
+                    value is None
+                    or str(value).lower()
+                    == "nan"
+                ):
                     row[clean_key] = "N/A"
+
                 else:
                     row[clean_key] = value
 
             rows.append(row)
 
         if rows:
-            render_dataframe(pd.DataFrame(rows))
+            render_dataframe(
+                pd.DataFrame(rows)
+            )
 
     historical_df = build_historical_dataframe(
-        forecast.get("historical_days")
+        forecast.get(
+            "historical_days"
+        )
     )
 
     if not historical_df.empty:
@@ -1375,7 +1778,6 @@ def render_forecast(result):
             "Daily transaction counts used by the forecasting workflow.",
         )
 
-        # Passing Date explicitly avoids the unreadable categorical date axis.
         st.line_chart(
             historical_df,
             x="Date",
@@ -1389,12 +1791,22 @@ def render_forecast(result):
         )
 
         display_df = historical_df.copy()
-        display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
-        display_df["Transactions"] = display_df["Transactions"].map(
-            lambda x: f"{x:,.0f}"
+
+        display_df["Date"] = (
+            display_df["Date"]
+            .dt.strftime("%Y-%m-%d")
         )
 
-        render_dataframe(display_df)
+        display_df["Transactions"] = (
+            display_df["Transactions"]
+            .map(
+                lambda x: f"{x:,.0f}"
+            )
+        )
+
+        render_dataframe(
+            display_df
+        )
 
 
 # ============================================================
@@ -1402,8 +1814,13 @@ def render_forecast(result):
 # ============================================================
 
 def render_process(result):
-    executed = get_executed_agents(result)
-    selected = get_selected_agents(result)
+    executed = get_executed_agents(
+        result
+    )
+
+    selected = get_selected_agents(
+        result
+    )
 
     active_agents = []
 
@@ -1434,27 +1851,54 @@ def render_process(result):
         if item[0] in active_agents
     ]
 
-    cols = st.columns(min(3, len(visible_agents)))
+    if not visible_agents:
+        return
 
-    for index, (agent_key, label) in enumerate(visible_agents):
-        state = agent_state(result, agent_key)
+    cols = st.columns(
+        min(
+            3,
+            len(visible_agents),
+        )
+    )
+
+    for index, (
+        agent_key,
+        label,
+    ) in enumerate(
+        visible_agents
+    ):
+        state = agent_state(
+            result,
+            agent_key,
+        )
 
         if state == "Completed":
             badge = "badge-green"
+
         elif state == "Selected":
             badge = "badge-blue"
+
         else:
             badge = "badge-gray"
 
         content = (
             '<div class="workflow-card">'
-            f'<div class="workflow-name">{safe_text(label)}</div>'
-            f'<span class="badge {badge}">{safe_text(state)}</span>'
+            f'<div class="workflow-name">'
+            f'{safe_text(label)}'
+            f'</div>'
+            f'<span class="badge {badge}">'
+            f'{safe_text(state)}'
+            f'</span>'
             '</div>'
         )
 
-        with cols[index % len(cols)]:
-            st.markdown(content, unsafe_allow_html=True)
+        with cols[
+            index % len(cols)
+        ]:
+            st.markdown(
+                content,
+                unsafe_allow_html=True,
+            )
 
 
 # ============================================================
@@ -1462,41 +1906,143 @@ def render_process(result):
 # ============================================================
 
 def render_validation(result):
-    validation = get_validation(result)
+    validation = get_validation(
+        result
+    )
 
     if not validation:
         return
 
-    valid = validation.get("valid")
+    valid = validation.get(
+        "valid"
+    )
 
     if valid is True:
-        st.success("Report validation passed.")
-    elif valid is False:
-        st.warning("Report validation returned warnings or errors.")
+        st.success(
+            "Report validation passed."
+        )
 
-    errors = (
-        validation.get("errors")
-        or validation.get("consistency_errors")
+    elif valid is False:
+        st.warning(
+            "Report validation returned warnings or errors."
+        )
+
+    numerical_integrity = validation.get(
+        "numerical_integrity"
+    )
+
+    section_integrity = validation.get(
+        "section_integrity"
+    )
+
+    consistency_integrity = validation.get(
+        "consistency_integrity"
+    )
+
+    render_section(
+        "Report Validation",
+        "Automated integrity checks performed against the analytical agent outputs.",
+    )
+
+    validation_cols = st.columns(4)
+
+    with validation_cols[0]:
+        render_kpi(
+            "Overall",
+            "PASSED"
+            if valid is True
+            else "FAILED"
+            if valid is False
+            else "—",
+        )
+
+    with validation_cols[1]:
+        render_kpi(
+            "Numerical Integrity",
+            "PASSED"
+            if numerical_integrity is True
+            else "FAILED"
+            if numerical_integrity is False
+            else "—",
+        )
+
+    with validation_cols[2]:
+        render_kpi(
+            "Section Integrity",
+            "PASSED"
+            if section_integrity is True
+            else "FAILED"
+            if section_integrity is False
+            else "—",
+        )
+
+    with validation_cols[3]:
+        render_kpi(
+            "Consistency",
+            "PASSED"
+            if consistency_integrity is True
+            else "FAILED"
+            if consistency_integrity is False
+            else "—",
+        )
+
+    invalid_numbers = (
+        validation.get(
+            "invalid_numbers"
+        )
         or []
     )
 
-    warnings = validation.get("warnings") or []
+    missing_sections = (
+        validation.get(
+            "missing_sections"
+        )
+        or []
+    )
 
-    if errors:
-        render_section("Validation Issues")
+    consistency_errors = (
+        validation.get(
+            "consistency_errors"
+        )
+        or []
+    )
 
-        for error in errors:
+    if invalid_numbers:
+        render_section(
+            "Invalid Numbers"
+        )
+
+        for number in invalid_numbers:
             st.markdown(
-                f'<div class="finding">{safe_text(error)}</div>',
+                f'<div class="finding">'
+                f'{safe_text(number)}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
-    if warnings:
-        render_section("Validation Warnings")
+    if missing_sections:
+        render_section(
+            "Missing Sections"
+        )
 
-        for warning in warnings:
+        for section in missing_sections:
             st.markdown(
-                f'<div class="finding">{safe_text(warning)}</div>',
+                f'<div class="finding">'
+                f'{safe_text(section)}'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    if consistency_errors:
+        render_section(
+            "Consistency Errors"
+        )
+
+        for error in consistency_errors:
+            st.markdown(
+                f'<div class="finding">'
+                f'{safe_text(error)}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
@@ -1506,7 +2052,9 @@ def render_validation(result):
 # ============================================================
 
 def render_report(result):
-    report = get_report(result)
+    report = get_report(
+        result
+    )
 
     if not report:
         render_empty(
@@ -1525,7 +2073,9 @@ def render_report(result):
         unsafe_allow_html=True,
     )
 
-    st.markdown(report)
+    st.markdown(
+        report
+    )
 
     st.markdown(
         '</div>',
@@ -1555,8 +2105,9 @@ def render_question_box():
         "Ask a specific question",
         key="analysis_question",
         placeholder=(
-            "Example: Give me a complete financial analysis including "
-            "performance, risk, forecast, and management recommendations."
+            "Example: Give me a complete financial analysis "
+            "including performance, risk, forecast, and "
+            "management recommendations."
         ),
         height=90,
         label_visibility="visible",
@@ -1568,8 +2119,12 @@ def render_question_box():
 # ============================================================
 
 def run_analysis(question):
-    with st.spinner("Running AI CFO analysis..."):
-        return run_cfo(question)
+    with st.spinner(
+        "Running AI CFO analysis..."
+    ):
+        return run_cfo(
+            question
+        )
 
 
 def reset_analysis():
@@ -1586,23 +2141,32 @@ def reset_analysis():
 with st.sidebar:
     st.markdown(
         '<div class="cfo-brand">◆ AI CFO</div>'
-        '<div class="cfo-subtitle">Financial Management System</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown(
-        '<div class="sidebar-label">SYSTEM STATUS</div>'
-        '<div class="sidebar-status">'
-        '<div class="sidebar-status-title">'
-        '<span style="color:#31a354;">●</span> Application Ready'
-        '</div>'
-        '<div class="sidebar-status-sub">v1.0 · Internal build</div>'
+        '<div class="cfo-subtitle">'
+        'Financial Management System'
         '</div>',
         unsafe_allow_html=True,
     )
 
     st.markdown(
-        '<div class="nav-title">WORKSPACE</div>',
+        '<div class="sidebar-label">'
+        'SYSTEM STATUS'
+        '</div>'
+        '<div class="sidebar-status">'
+        '<div class="sidebar-status-title">'
+        '<span style="color:#31a354;">●</span> '
+        'Application Ready'
+        '</div>'
+        '<div class="sidebar-status-sub">'
+        'v1.0 · Internal build'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="nav-title">'
+        'WORKSPACE'
+        '</div>',
         unsafe_allow_html=True,
     )
 
@@ -1624,7 +2188,9 @@ with st.sidebar:
             st.session_state.active_view = view
             st.rerun()
 
-    st.markdown("---")
+    st.markdown(
+        "---"
+    )
 
     st.button(
         "New Analysis",
@@ -1639,7 +2205,9 @@ with st.sidebar:
 # ============================================================
 
 st.markdown(
-    '<div class="page-kicker">AI CFO / Workspace</div>',
+    '<div class="page-kicker">'
+    'AI CFO / Workspace'
+    '</div>',
     unsafe_allow_html=True,
 )
 
@@ -1648,10 +2216,15 @@ st.markdown(
 # OVERVIEW
 # ============================================================
 
-if st.session_state.active_view == "Overview":
+if (
+    st.session_state.active_view
+    == "Overview"
+):
     st.markdown(
         '<div class="hero">'
-        '<div class="hero-title">Financial Intelligence</div>'
+        '<div class="hero-title">'
+        'Financial Intelligence'
+        '</div>'
         '<div class="hero-description">'
         'Understand financial activity, monitor transaction risk, '
         'forecast upcoming activity, and create management reports '
@@ -1667,6 +2240,7 @@ if st.session_state.active_view == "Overview":
     )
 
     col1, col2, col3, col4 = st.columns(4)
+
     quick_question = None
 
     with col1:
@@ -1674,7 +2248,9 @@ if st.session_state.active_view == "Overview":
             '<div class="action-card">'
             '<div class="action-icon">▣</div>'
             '<div class="action-title">Performance</div>'
-            '<div class="action-text">View financial activity</div>'
+            '<div class="action-text">'
+            'View financial activity'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1685,8 +2261,9 @@ if st.session_state.active_view == "Overview":
             use_container_width=True,
         ):
             quick_question = (
-                "Analyze the overall financial performance "
-                "and summarize the key financial metrics."
+                "Analyze the overall financial "
+                "performance and summarize the "
+                "key financial metrics."
             )
 
     with col2:
@@ -1694,7 +2271,9 @@ if st.session_state.active_view == "Overview":
             '<div class="action-card">'
             '<div class="action-icon">◈</div>'
             '<div class="action-title">Risk</div>'
-            '<div class="action-text">Check transaction risk</div>'
+            '<div class="action-text">'
+            'Check transaction risk'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1714,7 +2293,9 @@ if st.session_state.active_view == "Overview":
             '<div class="action-card">'
             '<div class="action-icon">◇</div>'
             '<div class="action-title">Forecast</div>'
-            '<div class="action-text">See expected activity</div>'
+            '<div class="action-text">'
+            'See expected activity'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1734,7 +2315,9 @@ if st.session_state.active_view == "Overview":
             '<div class="action-card">'
             '<div class="action-icon">▤</div>'
             '<div class="action-title">Report</div>'
-            '<div class="action-text">Create management report</div>'
+            '<div class="action-text">'
+            'Create management report'
+            '</div>'
             '</div>',
             unsafe_allow_html=True,
         )
@@ -1745,10 +2328,10 @@ if st.session_state.active_view == "Overview":
             use_container_width=True,
         ):
             quick_question = (
-                "Generate a complete executive financial report "
-                "covering financial performance, transaction risk, "
-                "forecast, key insights, management recommendations, "
-                "and report validation."
+                "Generate a complete executive financial "
+                "report covering financial performance, "
+                "transaction risk, forecast, key insights, "
+                "management recommendations, and report validation."
             )
 
     question = render_question_box()
@@ -1762,78 +2345,133 @@ if st.session_state.active_view == "Overview":
 
     selected_question = quick_question
 
-    if selected_question is None and analyze_clicked:
+    if (
+        selected_question is None
+        and analyze_clicked
+    ):
         if not question.strip():
             st.warning(
-                "Enter a question or choose one of the analysis areas above."
+                "Enter a question or choose one "
+                "of the analysis areas above."
             )
         else:
-            selected_question = question.strip()
+            selected_question = (
+                question.strip()
+            )
 
     if selected_question:
         try:
-            result = run_analysis(selected_question)
+            result = run_analysis(
+                selected_question
+            )
 
-            st.session_state.analysis_result = result
+            st.session_state.analysis_result = (
+                result
+            )
+
             st.session_state.last_error = None
-            st.session_state.active_view = "Overview"
+            st.session_state.active_view = (
+                "Overview"
+            )
 
             st.rerun()
 
         except Exception as error:
-            st.session_state.last_error = str(error)
-            st.error(f"Analysis failed: {error}")
+            st.session_state.last_error = (
+                str(error)
+            )
 
-    result = st.session_state.analysis_result
+            st.error(
+                f"Analysis failed: {error}"
+            )
+
+    result = (
+        st.session_state.analysis_result
+    )
 
     if result is None:
         render_empty(
             "Start with an area above",
             "Choose Performance, Risk, Forecast, or Report to begin.",
         )
-    else:
-        render_analysis_context(result)
 
-        executed_agents = set(get_executed_agents(result))
+    else:
+        render_analysis_context(
+            result
+        )
+
+        executed_agents = set(
+            get_executed_agents(
+                result
+            )
+        )
 
         if "SQL" in executed_agents:
-            render_financial_overview(result)
+            render_financial_overview(
+                result
+            )
 
-        if executed_agents.intersection({"RISK", "FORECAST"}):
-            render_key_findings(result)
+        if executed_agents.intersection(
+            {
+                "RISK",
+                "FORECAST",
+            }
+        ):
+            render_key_findings(
+                result
+            )
 
         if "INSIGHT" in executed_agents:
-            render_insight(result)
+            render_insight(
+                result
+            )
 
         if "RISK" in executed_agents:
-            render_risk_summary(result)
+            render_risk_summary(
+                result
+            )
 
         if "FORECAST" in executed_agents:
-            render_forecast(result)
+            render_forecast(
+                result
+            )
 
         if "REPORT" in executed_agents:
-            render_report(result)
+            render_report(
+                result
+            )
 
         if "VALIDATOR" in executed_agents:
-            render_validation(result)
+            render_validation(
+                result
+            )
 
-        render_process(result)
+        render_process(
+            result
+        )
 
 
 # ============================================================
 # ANALYTICS
 # ============================================================
 
-elif st.session_state.active_view == "Analytics":
+elif (
+    st.session_state.active_view
+    == "Analytics"
+):
     st.markdown(
-        '<div class="page-title">Analytics</div>'
+        '<div class="page-title">'
+        'Analytics'
+        '</div>'
         '<div class="page-description">'
         'Financial activity returned by the SQL analysis workflow.'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    result = st.session_state.analysis_result
+    result = (
+        st.session_state.analysis_result
+    )
 
     if result is None:
         render_empty(
@@ -1841,19 +2479,37 @@ elif st.session_state.active_view == "Analytics":
             "Run an analysis from Overview first.",
         )
 
-    elif not agent_executed(result, "SQL"):
+    elif not agent_executed(
+        result,
+        "SQL",
+    ):
         render_empty(
             "SQL analysis was not executed",
             "Run a Performance, Risk, Forecast, or Report analysis first.",
         )
 
     else:
-        render_analysis_context(result)
-        render_financial_overview(result)
+        render_analysis_context(
+            result
+        )
 
-        sql_result = get_sql_result(result)
-        rows = sql_result.get("rows", [])
-        columns = sql_result.get("columns", [])
+        render_financial_overview(
+            result
+        )
+
+        sql_result = get_sql_result(
+            result
+        )
+
+        rows = sql_result.get(
+            "rows",
+            [],
+        )
+
+        columns = sql_result.get(
+            "columns",
+            [],
+        )
 
         if rows:
             render_section(
@@ -1863,29 +2519,48 @@ elif st.session_state.active_view == "Analytics":
 
             try:
                 dataframe = (
-                    pd.DataFrame(rows, columns=columns)
+                    pd.DataFrame(
+                        rows,
+                        columns=columns,
+                    )
                     if columns
-                    else pd.DataFrame(rows)
+                    else pd.DataFrame(
+                        rows
+                    )
                 )
-                render_dataframe(dataframe)
+
+                render_dataframe(
+                    dataframe
+                )
+
             except Exception:
-                st.write(rows)
+                st.write(
+                    rows
+                )
+
         else:
             render_empty(
                 "No SQL rows returned",
                 "The SQL Agent did not return tabular rows for this analysis.",
             )
 
-        render_process(result)
+        render_process(
+            result
+        )
 
 
 # ============================================================
 # RISK
 # ============================================================
 
-elif st.session_state.active_view == "Risk":
+elif (
+    st.session_state.active_view
+    == "Risk"
+):
     st.markdown(
-        '<div class="page-title">Risk Analysis</div>'
+        '<div class="page-title">'
+        'Risk Analysis'
+        '</div>'
         '<div class="page-description">'
         'Transaction risk and anomaly indicators generated '
         'from the financial dataset.'
@@ -1893,7 +2568,9 @@ elif st.session_state.active_view == "Risk":
         unsafe_allow_html=True,
     )
 
-    result = st.session_state.analysis_result
+    result = (
+        st.session_state.analysis_result
+    )
 
     if result is None:
         render_empty(
@@ -1901,30 +2578,53 @@ elif st.session_state.active_view == "Risk":
             "Run a Risk analysis from Overview first.",
         )
 
-    elif not agent_executed(result, "RISK"):
+    elif not agent_executed(
+        result,
+        "RISK",
+    ):
         render_empty(
             "Risk Agent was not executed",
             "Run a Risk analysis from Overview first.",
         )
 
     else:
-        render_analysis_context(result)
+        render_analysis_context(
+            result
+        )
 
-        if agent_executed(result, "SQL"):
-            render_financial_overview(result)
+        if agent_executed(
+            result,
+            "SQL",
+        ):
+            render_financial_overview(
+                result
+            )
 
-        render_key_findings(result)
-        render_risk_summary(result)
-        render_process(result)
+        render_key_findings(
+            result
+        )
+
+        render_risk_summary(
+            result
+        )
+
+        render_process(
+            result
+        )
 
 
 # ============================================================
 # FORECAST
 # ============================================================
 
-elif st.session_state.active_view == "Forecast":
+elif (
+    st.session_state.active_view
+    == "Forecast"
+):
     st.markdown(
-        '<div class="page-title">Forecast</div>'
+        '<div class="page-title">'
+        'Forecast'
+        '</div>'
         '<div class="page-description">'
         'Historical transaction activity and next-observation '
         'transaction-count forecasting.'
@@ -1932,7 +2632,9 @@ elif st.session_state.active_view == "Forecast":
         unsafe_allow_html=True,
     )
 
-    result = st.session_state.analysis_result
+    result = (
+        st.session_state.analysis_result
+    )
 
     if result is None:
         render_empty(
@@ -1940,30 +2642,53 @@ elif st.session_state.active_view == "Forecast":
             "Run a Forecast analysis from Overview first.",
         )
 
-    elif not agent_executed(result, "FORECAST"):
+    elif not agent_executed(
+        result,
+        "FORECAST",
+    ):
         render_empty(
             "Forecast Agent was not executed",
             "Run a Forecast analysis from Overview first.",
         )
 
     else:
-        render_analysis_context(result)
+        render_analysis_context(
+            result
+        )
 
-        if agent_executed(result, "SQL"):
-            render_financial_overview(result)
+        if agent_executed(
+            result,
+            "SQL",
+        ):
+            render_financial_overview(
+                result
+            )
 
-        render_key_findings(result)
-        render_forecast(result)
-        render_process(result)
+        render_key_findings(
+            result
+        )
+
+        render_forecast(
+            result
+        )
+
+        render_process(
+            result
+        )
 
 
 # ============================================================
 # REPORTS
 # ============================================================
 
-elif st.session_state.active_view == "Reports":
+elif (
+    st.session_state.active_view
+    == "Reports"
+):
     st.markdown(
-        '<div class="page-title">Management Reports</div>'
+        '<div class="page-title">'
+        'Management Reports'
+        '</div>'
         '<div class="page-description">'
         'Consolidated financial intelligence generated by '
         'the AI CFO workflow.'
@@ -1971,7 +2696,9 @@ elif st.session_state.active_view == "Reports":
         unsafe_allow_html=True,
     )
 
-    result = st.session_state.analysis_result
+    result = (
+        st.session_state.analysis_result
+    )
 
     if result is None:
         render_empty(
@@ -1979,49 +2706,90 @@ elif st.session_state.active_view == "Reports":
             "Generate a management report from Overview first.",
         )
 
-    elif not agent_executed(result, "REPORT"):
+    elif not agent_executed(
+        result,
+        "REPORT",
+    ):
         render_empty(
             "Report Agent was not executed",
             "Use Generate Report or request a complete executive analysis.",
         )
 
     else:
-        render_analysis_context(result)
+        render_analysis_context(
+            result
+        )
 
-        if agent_executed(result, "SQL"):
-            render_financial_overview(result)
+        if agent_executed(
+            result,
+            "SQL",
+        ):
+            render_financial_overview(
+                result
+            )
 
-        if agent_executed(result, "INSIGHT"):
-            render_insight(result)
+        if agent_executed(
+            result,
+            "INSIGHT",
+        ):
+            render_insight(
+                result
+            )
 
-        if agent_executed(result, "RISK"):
-            render_risk_summary(result)
+        if agent_executed(
+            result,
+            "RISK",
+        ):
+            render_risk_summary(
+                result
+            )
 
-        if agent_executed(result, "FORECAST"):
-            render_forecast(result)
+        if agent_executed(
+            result,
+            "FORECAST",
+        ):
+            render_forecast(
+                result
+            )
 
-        render_report(result)
+        render_report(
+            result
+        )
 
-        if agent_executed(result, "VALIDATOR"):
-            render_validation(result)
+        if agent_executed(
+            result,
+            "VALIDATOR",
+        ):
+            render_validation(
+                result
+            )
 
-        render_process(result)
+        render_process(
+            result
+        )
 
 
 # ============================================================
 # SYSTEM
 # ============================================================
 
-elif st.session_state.active_view == "System":
+elif (
+    st.session_state.active_view
+    == "System"
+):
     st.markdown(
-        '<div class="page-title">System</div>'
+        '<div class="page-title">'
+        'System'
+        '</div>'
         '<div class="page-description">'
         'AI CFO architecture and technology stack.'
         '</div>',
         unsafe_allow_html=True,
     )
 
-    render_section("Architecture")
+    render_section(
+        "Architecture"
+    )
 
     architecture = [
         (
@@ -2056,17 +2824,30 @@ elif st.session_state.active_view == "System":
 
     cols = st.columns(3)
 
-    for index, (name, description) in enumerate(architecture):
-        with cols[index % 3]:
+    for index, (
+        name,
+        description,
+    ) in enumerate(
+        architecture
+    ):
+        with cols[
+            index % 3
+        ]:
             st.markdown(
                 '<div class="system-card">'
-                f'<div class="system-name">{safe_text(name)}</div>'
-                f'<div class="system-text">{safe_text(description)}</div>'
+                f'<div class="system-name">'
+                f'{safe_text(name)}'
+                f'</div>'
+                f'<div class="system-text">'
+                f'{safe_text(description)}'
+                f'</div>'
                 '</div>',
                 unsafe_allow_html=True,
             )
 
-    render_section("Technology")
+    render_section(
+        "Technology"
+    )
 
     st.markdown(
         '<span class="badge badge-purple">LangGraph</span>'
@@ -2078,25 +2859,43 @@ elif st.session_state.active_view == "System":
         unsafe_allow_html=True,
     )
 
-    render_section("Execution Model")
+    render_section(
+        "Execution Model"
+    )
 
     st.markdown(
         '<div class="card">'
-        '<span class="badge badge-blue">User Question</span>'
+        '<span class="badge badge-blue">'
+        'User Question'
+        '</span>'
         ' → '
-        '<span class="badge badge-purple">Supervisor</span>'
+        '<span class="badge badge-purple">'
+        'Supervisor'
+        '</span>'
         ' → '
-        '<span class="badge badge-green">SQL</span>'
+        '<span class="badge badge-green">'
+        'SQL'
+        '</span>'
         ' → '
-        '<span class="badge badge-orange">Risk</span>'
+        '<span class="badge badge-orange">'
+        'Risk'
+        '</span>'
         ' → '
-        '<span class="badge badge-purple">Forecast</span>'
+        '<span class="badge badge-purple">'
+        'Forecast'
+        '</span>'
         ' → '
-        '<span class="badge badge-blue">Insight</span>'
+        '<span class="badge badge-blue">'
+        'Insight'
+        '</span>'
         ' → '
-        '<span class="badge badge-green">Report</span>'
+        '<span class="badge badge-green">'
+        'Report'
+        '</span>'
         ' → '
-        '<span class="badge badge-orange">Validator</span>'
+        '<span class="badge badge-orange">'
+        'Validator'
+        '</span>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -2106,7 +2905,9 @@ elif st.session_state.active_view == "System":
         "not every agent runs for every analysis."
     )
 
-    render_section("Available Agents")
+    render_section(
+        "Available Agents"
+    )
 
     st.markdown(
         '<div class="card">'

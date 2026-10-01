@@ -8,6 +8,7 @@ from agents.risk_agent import run_risk_agent
 from agents.forecast_agent import run_forecast_agent
 from agents.insight_agent import run_insight_agent
 from agents.report_agent import run_report_agent
+from agents.report_validator import validate_report
 
 
 # ============================================================
@@ -16,7 +17,7 @@ from agents.report_agent import run_report_agent
 
 def parse_agents(next_agent: str) -> list[str]:
     """
-    Convert the supervisor output into a clean list of agents.
+    Convert supervisor output into a clean list of agents.
 
     Example:
         "SQL,RISK,FORECAST"
@@ -39,7 +40,6 @@ def parse_agents(next_agent: str) -> list[str]:
 # ============================================================
 
 def supervisor_node(state: CFOState):
-
     next_agent = run_supervisor(
         state["user_question"]
     )
@@ -54,7 +54,6 @@ def supervisor_node(state: CFOState):
 # ============================================================
 
 def sql_node(state: CFOState):
-
     result = run_sql_agent(
         state["user_question"]
     )
@@ -69,7 +68,6 @@ def sql_node(state: CFOState):
 # ============================================================
 
 def risk_node(state: CFOState):
-
     result = run_risk_agent()
 
     return {
@@ -82,7 +80,6 @@ def risk_node(state: CFOState):
 # ============================================================
 
 def forecast_node(state: CFOState):
-
     result = run_forecast_agent()
 
     return {
@@ -95,7 +92,6 @@ def forecast_node(state: CFOState):
 # ============================================================
 
 def insight_node(state: CFOState):
-
     result = run_insight_agent(
         sql_result=state.get(
             "sql_result",
@@ -121,8 +117,40 @@ def insight_node(state: CFOState):
 # ============================================================
 
 def report_node(state: CFOState):
-
     result = run_report_agent(
+        sql_result=state.get(
+            "sql_result",
+            {}
+        ),
+        risk_result=state.get(
+            "risk_result",
+            {}
+        ),
+        forecast_result=state.get(
+            "forecast_result",
+            {}
+        ),
+        insight_result=state.get(
+            "insight",
+            {}
+        ),
+    )
+
+    return {
+        "report": result
+    }
+
+
+# ============================================================
+# REPORT VALIDATOR NODE
+# ============================================================
+
+def validator_node(state: CFOState):
+    validation = validate_report(
+        report=state.get(
+            "report",
+            ""
+        ),
         sql_result=state.get(
             "sql_result",
             {}
@@ -138,7 +166,7 @@ def report_node(state: CFOState):
     )
 
     return {
-        "report": result
+        "validation": validation
     }
 
 
@@ -155,8 +183,8 @@ def route_from_supervisor(state: CFOState):
         )
     )
 
-    # SQL has the highest priority because
-    # Risk and Forecast depend on financial data.
+    # SQL has highest priority because
+    # it provides the financial context.
     if "SQL" in agents:
         return "sql"
 
@@ -166,6 +194,9 @@ def route_from_supervisor(state: CFOState):
     if "FORECAST" in agents:
         return "forecast"
 
+    # For a complete analytical workflow,
+    # start with SQL if the supervisor output
+    # does not contain a directly executable route.
     return "sql"
 
 
@@ -182,18 +213,15 @@ def route_after_sql(state: CFOState):
         )
     )
 
-    # Risk comes after SQL.
     if "RISK" in agents:
         return "risk"
 
-    # Forecast can run after SQL.
     if "FORECAST" in agents:
         return "forecast"
 
-    # If Insight or Report was requested directly,
-    # the available financial data is not enough for
-    # the complete downstream workflow unless Forecast
-    # is also requested.
+    if "REPORT" in agents or "INSIGHT" in agents:
+        return "forecast"
+
     return "end"
 
 
@@ -210,17 +238,12 @@ def route_after_risk(state: CFOState):
         )
     )
 
-    # Complete reports require Forecast after Risk.
     if "FORECAST" in agents:
         return "forecast"
 
-    # If the supervisor selected REPORT, the complete
-    # workflow must continue through Forecast.
     if "REPORT" in agents:
         return "forecast"
 
-    # If INSIGHT was selected together with Risk,
-    # Forecast is required because Insight expects it.
     if "INSIGHT" in agents:
         return "forecast"
 
@@ -233,7 +256,6 @@ def route_after_risk(state: CFOState):
 
 def route_after_forecast(state: CFOState):
 
-    # Forecast feeds the Insight Agent.
     return "insight"
 
 
@@ -243,7 +265,6 @@ def route_after_forecast(state: CFOState):
 
 def route_after_insight(state: CFOState):
 
-    # Insight feeds the Report Agent.
     return "report"
 
 
@@ -286,6 +307,11 @@ builder.add_node(
 builder.add_node(
     "report",
     report_node
+)
+
+builder.add_node(
+    "validator",
+    validator_node
 )
 
 
@@ -364,11 +390,21 @@ builder.add_edge(
 
 
 # ============================================================
-# REPORT → END
+# REPORT → VALIDATOR
 # ============================================================
 
 builder.add_edge(
     "report",
+    "validator"
+)
+
+
+# ============================================================
+# VALIDATOR → END
+# ============================================================
+
+builder.add_edge(
+    "validator",
     END
 )
 

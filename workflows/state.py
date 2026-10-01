@@ -10,6 +10,7 @@ class CFOState(TypedDict, total=False):
 
     insight: str
     report: str
+    validation: dict[str, Any]
 
     next_agent: str
     error: str
