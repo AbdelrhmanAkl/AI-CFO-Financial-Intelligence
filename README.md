@@ -3,6 +3,7 @@
 > A multi-agent financial intelligence platform that transforms transaction data into structured financial analysis, risk indicators, forecasting, AI-generated insights, and management reports.
 
 **Live Demo:** https://ai-cfo-financial-intelligence.streamlit.app/
+
 **GitHub:** https://github.com/AbdelrhmanAkl/AI-CFO-Financial-Intelligence
 
 ---
